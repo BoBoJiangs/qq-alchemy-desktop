@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>QQ 炼丹助手</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header>
+    <div>
+      <p class="eyebrow">LOCAL AUTOMATION CONSOLE</p>
+      <h1>QQ 炼丹助手</h1>
+      <p class="subtitle">UI Automation 优先 · 本地 OCR 兜底 · 失败即暂停</p>
+    </div>
+    <div id="statePill" class="pill neutral">正在连接</div>
+  </header>
+
+  <main>
+    <section id="alert" class="alert hidden"></section>
+
+    <section class="hero-grid">
+      <article class="card status-card">
+        <div class="card-title"><h2>运行状态</h2><span id="updatedAt">—</span></div>
+        <dl class="status-grid">
+          <div><dt>QQ 窗口</dt><dd id="qqConnected">—</dd></div>
+          <div><dt>校准</dt><dd id="calibrationValid">—</dd></div>
+          <div><dt>当前任务</dt><dd id="task">—</dd></div>
+          <div><dt>操作模式</dt><dd id="dryRun">—</dd></div>
+        </dl>
+        <div class="step"><span>当前步骤</span><strong id="step">—</strong></div>
+        <div class="actions">
+          <button class="primary" data-action="/api/tasks/purchase/start">开始采购</button>
+          <button class="primary" data-action="/api/tasks/alchemy/start">开始炼丹</button>
+          <button data-action="/api/tasks/purchase/stop">停止采购</button>
+          <button data-action="/api/tasks/alchemy/stop">停止炼丹</button>
+          <button data-action="/api/tasks/resume">人工恢复</button>
+          <button class="danger" data-action="/api/tasks/emergency-stop">紧急停止</button>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-title"><h2>首次导入</h2><span>只复制，不修改源项目</span></div>
+        <label>旧项目目录<input id="sourceRoot" value="D:\Java\qqbot"></label>
+        <label>账号目录/QQ 号（必填）<input id="accountId" placeholder="例如 3860863656"></label>
+        <button id="importBtn" class="wide">导入旧数据并生成配方</button>
+        <p id="importResult" class="hint">导入后数据只存放在 %LocalAppData%\QQAlchemyDesktop。</p>
+      </article>
+    </section>
+
+    <section class="card">
+      <div class="card-title"><h2>QQ 校准</h2><span>请先在桌面 QQ 中打开目标群并保持窗口尺寸</span></div>
+      <div class="form-row three">
+        <label>群名称<input id="groupName" placeholder="必须与群标题完全一致"></label>
+        <label>游戏机器人显示名<input id="botName" value="小小"></label>
+        <label>游戏机器人 QQ<input id="botQq" type="number" value="3889001741"></label>
+      </div>
+      <div class="actions compact">
+        <button id="calibrateBtn">探测当前 QQ 窗口</button>
+        <button id="verifyBtn" class="primary">验证群标题、窗口和 DPI</button>
+      </div>
+      <p id="calibrationResult" class="hint">校准不会绕过 QQ 登录，也不会读取内存或注入 DLL。</p>
+    </section>
+
+    <section class="split-grid">
+      <article class="card">
+        <div class="card-title"><h2>任务安全设置</h2><span>保存后立即生效</span></div>
+        <div class="form-row two">
+          <label>每炉成丹数<input id="danNumber" type="number" min="1" value="6"></label>
+          <label>炼丹配置类型<select id="alchemyMode"><option value="true">炼金收益</option><option value="false">坊市收益</option></select></label>
+          <label>炼金收益安全阈值<input id="alchemyNumber" type="number" min="0" value="30"></label>
+          <label>坊市收益安全阈值<input id="makeNumber" type="number" min="0" value="1000"></label>
+          <label>单次采购上限<input id="taskPurchaseLimit" type="number" min="1" value="50"></label>
+          <label>无符合商品结束轮数<input id="emptyRounds" type="number" min="1" value="3"></label>
+          <label>默认药材库存上限<input id="limitHerbsCount" type="number" min="0" value="30"></label>
+          <label>额外随机延迟上限（秒）<input id="randomDelay" type="number" min="0" value="0"></label>
+        </div>
+        <label class="check"><input id="dryRunSetting" type="checkbox" checked><span>演练模式：只识别，不点击、不发送炼丹配方</span></label>
+        <button id="saveSettingsBtn" class="wide">保存安全设置</button>
+        <label class="rules-label">采购规则（每行：模式|最高万价|库存上限|药材名；模式填 repeat 或 normal）<textarea id="rulesText" rows="7" placeholder="repeat|80|30|乌灵参&#10;normal|120|30|血灵芝"></textarea></label>
+        <button id="saveRulesBtn" class="wide">保存采购规则</button>
+      </article>
+
+      <article class="card">
+        <div class="card-title"><h2>最近告警</h2><span>OCR 原文与截图</span></div>
+        <p id="lastError" class="error-text">暂无</p>
+        <pre id="ocrText">暂无 OCR 结果</pre>
+        <img id="failureShot" class="failure-shot hidden" alt="最近失败截图">
+      </article>
+    </section>
+
+    <section class="triple-grid">
+      <article class="card list-card"><div class="card-title"><h2>背包</h2><span id="inventoryCount">0 种</span></div><div id="inventory" class="data-list empty">暂无数据</div></article>
+      <article class="card list-card"><div class="card-title"><h2>坊市候选</h2><span id="candidateCount">0 项</span></div><div id="candidates" class="data-list empty">暂无数据</div></article>
+      <article class="card list-card"><div class="card-title"><h2>炼丹队列</h2><span id="queueCount">0 条</span></div><div id="queue" class="data-list empty">暂无数据</div></article>
+    </section>
+
+    <section class="card">
+      <div class="card-title"><h2>审计记录</h2><span>动作编号用于排查重复操作</span></div>
+      <div class="table-wrap"><table><thead><tr><th>时间</th><th>级别</th><th>事件</th><th>详情</th><th>动作编号</th></tr></thead><tbody id="audit"></tbody></table></div>
+    </section>
+  </main>
+  <div id="toast" class="toast hidden"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
