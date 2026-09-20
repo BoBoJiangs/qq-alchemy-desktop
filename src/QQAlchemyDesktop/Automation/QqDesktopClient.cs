@@ -311,7 +311,8 @@ public sealed class QqDesktopClient
             while (DateTimeOffset.UtcNow < deadline)
             {
                 await Task.Delay(900, cancellationToken);
-                var observation = await ObserveRegionTwiceAsync(settings.ChatRegion, cancellationToken);
+                var observation = await ObserveRegionTwiceAsync(settings.ChatRegion, cancellationToken,
+                    allowLiveRefresh: true);
                 if (MessageClassifier.IsCaptcha(observation.RawText))
                     throw new InvalidOperationException("校准测试触发验证码，请人工处理后重新校准");
                 if (!OcrResponseGate.TryExtractAfterCommand(observation, query, out var response) ||
@@ -379,7 +380,8 @@ public sealed class QqDesktopClient
         OcrObservation observation;
         try
         {
-            observation = await ObserveRegionTwiceAsync(settings.ChatRegion, cancellationToken);
+            observation = await ObserveRegionTwiceAsync(settings.ChatRegion, cancellationToken,
+                allowLiveRefresh: true);
         }
         catch (OcrConflictException exception)
         {
@@ -457,20 +459,52 @@ public sealed class QqDesktopClient
     public async Task<OcrObservation> ObserveChatAsync(CancellationToken cancellationToken = default)
     {
         var settings = await RequireVerifiedCalibrationAsync(cancellationToken);
-        return await ObserveRegionTwiceAsync(settings.ChatRegion, cancellationToken);
+        return await ObserveRegionTwiceAsync(settings.ChatRegion, cancellationToken,
+            allowLiveRefresh: true);
     }
 
     public async Task<OcrObservation> ObserveRegionTwiceAsync(NormalizedRect region,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, bool allowLiveRefresh = false)
     {
         using var firstBitmap = await CaptureRegionAsync(region, cancellationToken);
         var first = await _ocr.RecognizeAsync(firstBitmap, cancellationToken);
         await Task.Delay(300, cancellationToken);
         using var secondBitmap = await CaptureRegionAsync(region, cancellationToken);
         var second = await _ocr.RecognizeAsync(secondBitmap, cancellationToken);
-        if (!string.Equals(NormalizeForConsensus(first.RawText), NormalizeForConsensus(second.RawText), StringComparison.Ordinal))
+        if (!OcrConsensus.AreEquivalent(first, second))
+        {
+            if (allowLiveRefresh)
+            {
+                await Task.Delay(150, cancellationToken);
+                using var thirdBitmap = await CaptureRegionAsync(region, cancellationToken);
+                var third = await _ocr.RecognizeAsync(thirdBitmap, cancellationToken);
+                if (OcrConsensus.AreEquivalent(second, third) || OcrConsensus.AreEquivalent(first, third))
+                    return third;
+
+                await RecordOcrAuditAsync("warn", "ocr_live_refresh",
+                    $"聊天区域在刷新期间持续变化；first={OcrConsensus.Compact(first.RawText)} | " +
+                    $"second={OcrConsensus.Compact(second.RawText)} | third={OcrConsensus.Compact(third.RawText)}");
+                return third;
+            }
+
+            await RecordOcrAuditAsync("error", "ocr_conflict",
+                $"区域={region}; first={OcrConsensus.Compact(first.RawText)} | " +
+                $"second={OcrConsensus.Compact(second.RawText)}");
             throw new OcrConflictException("连续两次 OCR 结果不一致，任务已暂停", first, second);
+        }
         return second;
+    }
+
+    private async Task RecordOcrAuditAsync(string level, string eventType, string detail)
+    {
+        try
+        {
+            await _store.AuditAsync(level, eventType, detail, cancellationToken: CancellationToken.None);
+        }
+        catch
+        {
+            // 审计失败不能掩盖原始 OCR 结果或改变自动化安全状态。
+        }
     }
 
     public async Task SendAtCommandAsync(string command, CancellationToken cancellationToken = default)
@@ -1062,8 +1096,7 @@ public sealed class QqDesktopClient
     private sealed record MentionCandidate(AutomationElement Element, string Text, Rectangle Rectangle);
     private sealed record MentionOcrMatch(string Text, PixelRect Bounds, string Signature = "");
 
-    private static string NormalizeForConsensus(string value) =>
-        string.Concat(value.Where(c => !char.IsWhiteSpace(c))).Replace("：", ":", StringComparison.Ordinal).Trim();
+    private static string NormalizeForConsensus(string value) => OcrConsensus.Normalize(value);
 
     private static void RestoreAndActivate(IntPtr hwnd)
     {

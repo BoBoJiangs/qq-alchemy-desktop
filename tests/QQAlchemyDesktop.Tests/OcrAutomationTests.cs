@@ -50,6 +50,14 @@ public sealed class OcrAutomationTests
     }
 
     [Fact]
+    public void OcrConsensus_NormalizesPresentationNoiseButRejectsDifferentContent()
+    {
+        Assert.True(OcrConsensus.AreEquivalent("药材背包： 1 页", "药材背包:1页"));
+        Assert.False(OcrConsensus.AreEquivalent("药材背包", "坊市数据"));
+        Assert.EndsWith("…", OcrConsensus.Compact(new string('字', 181)));
+    }
+
+    [Fact]
     public async Task RapidOcrV5_RecognizesChineseMarketLineAndCoordinates()
     {
         using var bitmap = new Bitmap(620, 120);
