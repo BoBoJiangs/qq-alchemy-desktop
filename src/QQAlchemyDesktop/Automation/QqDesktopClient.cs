@@ -281,7 +281,7 @@ public sealed class QqDesktopClient
             Dpi = NativeMethods.GetDpiForWindow(hwnd),
             IsVerified = false
         };
-        TryDiscoverRegions(process, bounds, settings);
+        TryDiscoverRegions(hwnd, bounds, settings);
         await _store.SetSettingAsync("calibration", settings, cancellationToken);
         await _store.AuditAsync("info", "calibration_probe", $"检测到 QQ {settings.QqVersion}，窗口 {bounds.Width}x{bounds.Height}", cancellationToken: cancellationToken);
         return settings;
@@ -305,9 +305,9 @@ public sealed class QqDesktopClient
         try
         {
             var query = "药材背包";
-            var pageProbeSent = false;
+            var expectedPage = 1;
             await SendAtCommandAsync(query, cancellationToken);
-            var deadline = DateTimeOffset.UtcNow.AddSeconds(25);
+            var deadline = DateTimeOffset.UtcNow.AddSeconds(60);
             while (DateTimeOffset.UtcNow < deadline)
             {
                 await Task.Delay(900, cancellationToken);
@@ -315,36 +315,36 @@ public sealed class QqDesktopClient
                     allowLiveRefresh: true);
                 if (MessageClassifier.IsCaptcha(observation.RawText))
                     throw new InvalidOperationException("校准测试触发验证码，请人工处理后重新校准");
-                // 整屏回复卡片会把命令行顶出可视区：改用可视区最底部内容做响应门。
-                OcrResponseGate.TryExtractLatest(observation, 30, out var response);
-                if (!MessageClassifier.IsInventoryPage(response.RawText))
+                // 整屏回复卡片会把命令行顶出可视区：响应判定直接用完整区域原文
+                //（PP-OCR 已按行压缩空白，卡片内的名字/数量/页码都在其中）。
+                var page = ParsePageState(observation.RawText);
+                if (page is null)
                 {
-                    // 诊断：记录未命中的尾部原文（节流），定位门控失败原因。
-                    var missTail = response.RawText.Length > 160 ? response.RawText[^160..] : response.RawText;
+                    // 诊断：页脚“第N页/共M页”未被 OCR 识别（数字/文字误读），节流记录样本。
+                    var missTail = observation.RawText.Length > 120 ? observation.RawText[^120..] : observation.RawText;
                     try
                     {
-                        await _store.AuditAsync("warn", "verify_gate_miss", missTail,
-                            cancellationToken: cancellationToken);
+                        await _store.AuditAsync("warn", "verify_page_miss", missTail,
+                            cancellationToken: CancellationToken.None);
                     }
                     catch { /* 审计失败不影响主流程 */ }
                     continue;
                 }
-                if (!pageProbeSent && MessageClassifier.HasNextPage(response.RawText))
+                if (!MessageClassifier.IsInventoryPage(observation.RawText)) continue;
+                if (page.Value.Current != expectedPage) continue;
+                if (expectedPage >= page.Value.Total || expectedPage >= 20)
                 {
-                    pageProbeSent = true;
-                    query = "药材背包2";
-                    await SendAtCommandAsync(query, cancellationToken);
-                    deadline = DateTimeOffset.UtcNow.AddSeconds(25);
-                    continue;
+                    settings.VerifiedAt = DateTimeOffset.Now;
+                    settings.IsVerified = true;
+                    await _store.SetSettingAsync("calibration", settings, cancellationToken);
+                    await _store.AuditAsync("info", "calibration_verified",
+                        $"群标题、窗口尺寸、DPI 校验通过，背包 {page.Value.Total} 页逐页回读确认", cancellationToken: cancellationToken);
+                    return true;
                 }
-                if (pageProbeSent && !response.RawText.Contains("2页", StringComparison.Ordinal) &&
-                    !response.RawText.Contains("第2", StringComparison.Ordinal)) continue;
-                settings.VerifiedAt = DateTimeOffset.Now;
-                settings.IsVerified = true;
-                await _store.SetSettingAsync("calibration", settings, cancellationToken);
-                await _store.AuditAsync("info", "calibration_verified",
-                    "群标题、窗口尺寸、DPI、精确 @ 和药材背包 OCR 回读均通过", cancellationToken: cancellationToken);
-                return true;
+                expectedPage = page.Value.Current + 1;
+                query = $"药材背包{expectedPage}";
+                await SendAtCommandAsync(query, cancellationToken);
+                deadline = DateTimeOffset.UtcNow.AddSeconds(45);
             }
             settings.IsVerified = false;
             await _store.SetSettingAsync("calibration", settings, cancellationToken);
@@ -553,7 +553,11 @@ public sealed class QqDesktopClient
             }
             await Task.Delay(200, cancellationToken);
             if (!TryClickSendButton(settings))
-                throw new InvalidOperationException("已选中 @候选并填入命令，但没有找到 QQ 的“发送”按钮，拒绝发送");
+            {
+                // UIA 忙碌找不到“发送”按钮时，直接回车发送（输入框内就是刚填入的命令）。
+                KeyPress(NativeMethods.VkReturn);
+                await _store.AuditAsync("warn", "send_via_enter", command, cancellationToken: cancellationToken);
+            }
             await _store.AuditAsync("info", "qq_command_sent", command, Guid.NewGuid().ToString("N"), cancellationToken);
         }
         finally
@@ -876,36 +880,76 @@ public sealed class QqDesktopClient
             .Any(line => string.Equals(NormalizeForConsensus(line), normalizedExpected, StringComparison.Ordinal));
     }
 
-    private static void TryDiscoverRegions(Process process, Rectangle windowBounds, CalibrationSettings settings)
+    private static void TryDiscoverRegions(IntPtr hwnd, Rectangle windowBounds, CalibrationSettings settings)
     {
         try
         {
-            using var app = FlaUI.Core.Application.Attach(process);
             using var automation = new UIA3Automation();
-            var window = app.GetMainWindow(automation, TimeSpan.FromSeconds(2));
+            var window = automation.FromHandle(hwnd);
             if (window is null) return;
-            var title = window.FindAllDescendants(cf => cf.ByControlType(ControlType.Text))
-                .FirstOrDefault(x => string.Equals(x.Name?.Trim(), settings.GroupName, StringComparison.Ordinal) &&
-                                     x.BoundingRectangle.Top <= window.BoundingRectangle.Top + window.BoundingRectangle.Height * 0.25);
+            // 群标题只认聊天面板头部标题带（排除左侧会话列表和聊天消息里的同名文本）。
+            Rectangle? title = window.FindAllDescendants(cf => cf.ByControlType(ControlType.Text))
+                .Where(x => string.Equals(x.Name?.Trim(), settings.GroupName, StringComparison.Ordinal))
+                .Select(x => x.BoundingRectangle)
+                .Where(r => r.Top <= windowBounds.Top + windowBounds.Height * 0.12 &&
+                            r.Left >= windowBounds.Left + windowBounds.Width * 0.35 &&
+                            r.Left <= windowBounds.Left + windowBounds.Width * 0.98)
+                .OrderBy(r => r.Top)
+                .Select(r => Rectangle.FromLTRB((int)r.Left, (int)r.Top, (int)r.Right, (int)r.Bottom))
+                .FirstOrDefault();
             var input = window.FindAllDescendants(cf => cf.ByControlType(ControlType.Edit))
                 .Where(x => x.BoundingRectangle.Width >= windowBounds.Width * 0.35 &&
                             x.BoundingRectangle.Top >= windowBounds.Top + windowBounds.Height * 0.55)
                 .OrderByDescending(x => x.BoundingRectangle.Width * x.BoundingRectangle.Height)
                 .FirstOrDefault();
-            if (title is null || input is null) return;
-            var titleRect = title.BoundingRectangle;
-            var inputRect = input.BoundingRectangle;
-            settings.GroupTitleRegion = NormalizeRectangle(
-                Rectangle.FromLTRB((int)titleRect.Left - 12, (int)titleRect.Top - 8,
-                    (int)titleRect.Right + 12, (int)titleRect.Bottom + 8), windowBounds);
-            settings.InputRegion = NormalizeRectangle(
-                Rectangle.FromLTRB((int)inputRect.Left, (int)inputRect.Top,
-                    (int)inputRect.Right, (int)inputRect.Bottom), windowBounds);
-            var chatTop = Math.Max((int)titleRect.Bottom + 6, windowBounds.Top);
-            var chatBottom = Math.Min((int)inputRect.Top - 6, windowBounds.Bottom);
+            // 新版 QQNT 的聊天输入框不再暴露为 Edit 控件；
+            // 改用稳定的"发送"按钮 + 工具栏 icon-item 行几何推导输入区。
+            var send = window.FindAllDescendants(cf => cf.ByControlType(ControlType.Button))
+                .Where(x => string.Equals(x.Name?.Trim(), "发送", StringComparison.Ordinal))
+                .Select(x => x.BoundingRectangle)
+                .FirstOrDefault(r => r.Width > 15 && r.Width < 80 && r.Height > 15 && r.Height < 60 &&
+                                     r.Top >= windowBounds.Top + windowBounds.Height * 0.8);
+            Rectangle fallbackInput = Rectangle.Empty;
+            if (input is null && send != Rectangle.Empty)
+            {
+                var iconRects = window.FindAllDescendants(cf => cf.ByControlType(ControlType.Button))
+                    .Where(x => string.Equals(x.ClassName, "icon-item", StringComparison.Ordinal))
+                    .Select(x => x.BoundingRectangle)
+                    // 只取聊天面板内的工具栏图标，排除左侧栏/右键菜单里的同名 icon-item。
+                    .Where(r => r.Top >= windowBounds.Top + windowBounds.Height * 0.7 &&
+                                r.Bottom < send.Top &&
+                                r.Left >= windowBounds.Left + windowBounds.Width * 0.25)
+                    .ToArray();
+                if (iconRects.Length > 0)
+                {
+                    var left = iconRects.Min(r => r.Left) - 12;
+                    var right = iconRects.Max(r => r.Right) + 14;
+                    var top = iconRects.Max(r => r.Bottom) + 2;
+                    var bottom = send.Top - 4;
+                    if (right > left && bottom > top)
+                        fallbackInput = Rectangle.FromLTRB(left, top, right, bottom);
+                }
+            }
+            if (title is null && input is null && fallbackInput.IsEmpty) return;
+            if (title is not null && !title.Value.IsEmpty)
+            {
+                settings.GroupTitleRegion = NormalizeRectangle(
+                    Rectangle.FromLTRB(title.Value.Left - 12, title.Value.Top - 8,
+                        title.Value.Right + 12, title.Value.Bottom + 8), windowBounds);
+            }
+            var resolvedInput = input is not null
+                ? Rectangle.FromLTRB((int)input.BoundingRectangle.Left, (int)input.BoundingRectangle.Top,
+                    (int)input.BoundingRectangle.Right, (int)input.BoundingRectangle.Bottom)
+                : fallbackInput;
+            settings.InputRegion = NormalizeRectangle(resolvedInput, windowBounds);
+            var titleBottom = title is not null && !title.Value.IsEmpty
+                ? title.Value.Bottom
+                : windowBounds.Top + (int)(windowBounds.Height * 0.10);
+            var chatTop = Math.Max(titleBottom + 6, windowBounds.Top);
+            var chatBottom = Math.Min(resolvedInput.Top - 6, windowBounds.Bottom);
             if (chatBottom > chatTop)
-                settings.ChatRegion = NormalizeRectangle(Rectangle.FromLTRB((int)inputRect.Left, chatTop,
-                    (int)inputRect.Right, chatBottom), windowBounds);
+                settings.ChatRegion = NormalizeRectangle(Rectangle.FromLTRB(resolvedInput.Left, chatTop,
+                    resolvedInput.Right, chatBottom), windowBounds);
         }
         catch
         {
@@ -1075,7 +1119,7 @@ public sealed class QqDesktopClient
                 .Where(item => item.Text.StartsWith("发送", StringComparison.Ordinal) &&
                                item.Rectangle.Width > 25 && item.Rectangle.Height > 15 &&
                                item.Rectangle.Top >= inputBounds.Top + inputBounds.Height / 3 &&
-                               item.Rectangle.Bottom <= inputBounds.Bottom + 30)
+                               item.Rectangle.Bottom <= inputBounds.Bottom + Math.Max(30, inputBounds.Height))
                 .OrderByDescending(item => item.Rectangle.Top)
                 .ThenBy(item => item.Rectangle.Width * item.Rectangle.Height)
                 .ToArray();
@@ -1165,6 +1209,15 @@ public sealed class QqDesktopClient
     private sealed record MentionOcrMatch(string Text, PixelRect Bounds, string Signature = "");
 
     private static string NormalizeForConsensus(string value) => OcrConsensus.Normalize(value);
+
+    /// <summary>从背包/坊市卡片尾部解析“第N页/共M页”，识别不到返回 null。</summary>
+    private static (int Current, int Total)? ParsePageState(string rawText)
+    {
+        var compact = OcrConsensus.Normalize(rawText);
+        var m = Regex.Match(compact, @"第(\d+)页/共(\d+)页");
+        if (!m.Success) return null;
+        return (int.Parse(m.Groups[1].Value), int.Parse(m.Groups[2].Value));
+    }
 
     private static void RestoreAndActivate(IntPtr hwnd)
     {
