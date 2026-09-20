@@ -62,7 +62,7 @@ public sealed class QqDesktopClient
         {
             texts.Add($"[UIA_ERROR] {exception.Message}");
         }
-        var version = TryGetProcessVersion(process);
+        var version = TryGetVersionForWindow(hwnd);
         var processId = 0;
         var processName = "";
         var windowTitle = "";
@@ -273,8 +273,8 @@ public sealed class QqDesktopClient
             GroupName = request.GroupName.Trim(),
             GameBotDisplayName = request.GameBotDisplayName.Trim(),
             GameBotQq = request.GameBotQq,
-            QqExecutablePath = TryGetProcessPath(process),
-            QqVersion = TryGetProcessVersion(process),
+            QqExecutablePath = TryGetQqExecutablePath(hwnd),
+            QqVersion = TryGetVersionForWindow(hwnd),
             WindowTitleHint = process.MainWindowTitle,
             WindowWidth = bounds.Width,
             WindowHeight = bounds.Height,
@@ -750,7 +750,7 @@ public sealed class QqDesktopClient
     {
         if (!NativeMethods.GetWindowRect(hwnd, out var rect)) return false;
         var bounds = rect.ToRectangle();
-        var version = TryGetProcessVersion(process);
+        var version = TryGetVersionForWindow(hwnd);
         if (string.IsNullOrWhiteSpace(version) && File.Exists(settings.QqExecutablePath))
         {
             try { version = FileVersionInfo.GetVersionInfo(settings.QqExecutablePath).FileVersion ?? ""; }
@@ -761,6 +761,62 @@ public sealed class QqDesktopClient
                Math.Abs(bounds.Width - settings.WindowWidth) <= 3 &&
                Math.Abs(bounds.Height - settings.WindowHeight) <= 3 &&
                NativeMethods.GetDpiForWindow(hwnd) == settings.Dpi;
+    }
+
+    private static string TryGetQqExecutablePath(IntPtr hwnd)
+    {
+        NativeMethods.GetWindowThreadProcessId(hwnd, out var pid);
+        if (pid != 0)
+        {
+            try
+            {
+                using var proc = Process.GetProcessById((int)pid);
+                var path = proc.MainModule?.FileName;
+                if (!string.IsNullOrWhiteSpace(path)) return path;
+            }
+            catch
+            {
+                // 进程权限不足时继续使用已知安装路径回退。
+            }
+        }
+        foreach (var path in EnumerateKnownQqPaths())
+            if (File.Exists(path)) return path;
+        return "";
+    }
+
+    /// <summary>窗口所属 QQ 进程的版本号；MainModule 拒绝访问时按已知安装路径回退（QQNT 常见）。</summary>
+    private static string TryGetVersionForWindow(IntPtr hwnd)
+    {
+        NativeMethods.GetWindowThreadProcessId(hwnd, out var pid);
+        if (pid != 0)
+        {
+            try
+            {
+                using var proc = Process.GetProcessById((int)pid);
+                var version = proc.MainModule?.FileVersionInfo.FileVersion;
+                if (!string.IsNullOrWhiteSpace(version)) return version;
+            }
+            catch
+            {
+                // QQNT 进程偶尔拒绝读取 MainModule，下面按已知安装路径回退。
+            }
+        }
+        var fallbackPath = TryGetQqExecutablePath(hwnd);
+        if (!string.IsNullOrWhiteSpace(fallbackPath))
+        {
+            try { return FileVersionInfo.GetVersionInfo(fallbackPath).FileVersion ?? ""; }
+            catch { /* 失败即返回空，由指纹校验阻止自动化 */ }
+        }
+        return "";
+    }
+
+    private static IEnumerable<string> EnumerateKnownQqPaths()
+    {
+        yield return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Tencent", "QQNT", "QQ.exe");
+        yield return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Tencent", "QQNT", "QQ.exe");
+        foreach (var drive in DriveInfo.GetDrives()
+                     .Where(d => d.DriveType == DriveType.Fixed && d.IsReady))
+            yield return Path.Combine(drive.RootDirectory.FullName, "Program Files", "Tencent", "QQNT", "QQ.exe");
     }
 
     private static string TryGetProcessPath(Process process)
