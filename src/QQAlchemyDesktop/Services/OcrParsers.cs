@@ -164,6 +164,26 @@ public static class MessageClassifier
 
 public static class OcrResponseGate
 {
+    /// <summary>
+    /// 整屏高的回复卡片会把命令行顶出可视区：改用可视区最底部（最新一条消息尾部）作为响应来源。
+    /// 新鲜度由调用方的帧哈希/messageHash 变化检测保证。
+    /// </summary>
+    public static bool TryExtractLatest(OcrObservation observation, int lineCount, out OcrObservation latest)
+    {
+        var lines = GroupLines(observation.Words);
+        var tail = lines.TakeLast(Math.Max(1, lineCount)).ToArray();
+        var words = tail.SelectMany(line => line).ToArray();
+        if (words.Length == 0)
+        {
+            latest = observation with { RawText = "", Words = Array.Empty<OcrWordData>() };
+            return false;
+        }
+        var raw = string.Join('\n', tail.Select(line =>
+            string.Concat(line.OrderBy(x => x.Bounds.X).Select(x => x.Text))));
+        latest = observation with { RawText = raw, Words = words };
+        return true;
+    }
+
     public static bool TryExtractAfterCommand(OcrObservation observation, string command, out OcrObservation response)
     {
         var lines = GroupLines(observation.Words);

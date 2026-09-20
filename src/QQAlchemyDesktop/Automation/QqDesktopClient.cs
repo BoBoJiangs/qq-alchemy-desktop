@@ -315,8 +315,20 @@ public sealed class QqDesktopClient
                     allowLiveRefresh: true);
                 if (MessageClassifier.IsCaptcha(observation.RawText))
                     throw new InvalidOperationException("校准测试触发验证码，请人工处理后重新校准");
-                if (!OcrResponseGate.TryExtractAfterCommand(observation, query, out var response) ||
-                    !MessageClassifier.IsInventoryPage(response.RawText)) continue;
+                // 整屏回复卡片会把命令行顶出可视区：改用可视区最底部内容做响应门。
+                OcrResponseGate.TryExtractLatest(observation, 30, out var response);
+                if (!MessageClassifier.IsInventoryPage(response.RawText))
+                {
+                    // 诊断：记录未命中的尾部原文（节流），定位门控失败原因。
+                    var missTail = response.RawText.Length > 160 ? response.RawText[^160..] : response.RawText;
+                    try
+                    {
+                        await _store.AuditAsync("warn", "verify_gate_miss", missTail,
+                            cancellationToken: cancellationToken);
+                    }
+                    catch { /* 审计失败不影响主流程 */ }
+                    continue;
+                }
                 if (!pageProbeSent && MessageClassifier.HasNextPage(response.RawText))
                 {
                     pageProbeSent = true;

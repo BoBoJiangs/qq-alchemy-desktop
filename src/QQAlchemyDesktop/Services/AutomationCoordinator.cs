@@ -240,22 +240,31 @@ public sealed class AutomationCoordinator : BackgroundService
 
             switch (_checkpoint.State)
             {
+                // 整屏高的回复卡片会把命令行顶出可视区：统一改用可视区最底部内容做响应门。
                 case AutomationState.ReadingInventory:
-                    if (_lastQuery is not null && OcrResponseGate.TryExtractAfterCommand(observation, _lastQuery, out var inventoryResponse))
-                        await HandleInventoryLockedAsync(inventoryResponse, cancellationToken);
+                {
+                    OcrResponseGate.TryExtractLatest(observation, 30, out var inventoryResponse);
+                    await HandleInventoryLockedAsync(inventoryResponse, cancellationToken);
                     break;
+                }
                 case AutomationState.ScanningMarket:
-                    if (_lastQuery is not null && OcrResponseGate.TryExtractAfterCommand(observation, _lastQuery, out var marketResponse))
-                        await HandleMarketLockedAsync(marketResponse, cancellationToken);
+                {
+                    OcrResponseGate.TryExtractLatest(observation, 30, out var marketResponse);
+                    await HandleMarketLockedAsync(marketResponse, cancellationToken);
                     break;
+                }
                 case AutomationState.WaitingPurchaseResult:
-                    if (_lastQuery is not null && OcrResponseGate.TryExtractAfterCommand(observation, _lastQuery, out var purchaseResponse))
-                        await HandlePurchaseResultLockedAsync(OcrResponseGate.LatestText(purchaseResponse), cancellationToken);
+                {
+                    OcrResponseGate.TryExtractLatest(observation, 10, out var purchaseResponse);
+                    await HandlePurchaseResultLockedAsync(OcrResponseGate.LatestText(purchaseResponse, 10), cancellationToken);
                     break;
+                }
                 case AutomationState.WaitingAlchemyResult:
-                    if (_lastQuery is not null && OcrResponseGate.TryExtractAfterCommand(observation, _lastQuery, out var alchemyResponse))
-                        await HandleAlchemyResultLockedAsync(OcrResponseGate.LatestText(alchemyResponse), cancellationToken);
+                {
+                    OcrResponseGate.TryExtractLatest(observation, 10, out var alchemyResponse);
+                    await HandleAlchemyResultLockedAsync(OcrResponseGate.LatestText(alchemyResponse, 10), cancellationToken);
                     break;
+                }
             }
         }
         finally

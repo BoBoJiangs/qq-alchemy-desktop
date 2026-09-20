@@ -92,7 +92,7 @@ public sealed class RapidOcrService
             if (line is null) lines.Add([word]); else line.Add(word);
         }
         return string.Join('\n', lines.Select(line =>
-            string.Join(' ', line.OrderBy(word => word.Bounds.X).Select(word => word.Text))));
+            string.Concat(line.OrderBy(word => word.Bounds.X).Select(word => word.Text))));
     }
 
     private static Bitmap Scale(Bitmap source, int factor)
