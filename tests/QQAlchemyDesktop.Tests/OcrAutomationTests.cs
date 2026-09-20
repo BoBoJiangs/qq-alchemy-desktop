@@ -42,6 +42,14 @@ public sealed class OcrAutomationTests
         Assert.False(PurchaseCommandValidator.TryValidate(text, "小小", out _));
 
     [Fact]
+    public void PurchaseCommandValidator_AllowsNoMentionWhenConfigured()
+    {
+        Assert.True(PurchaseCommandValidator.TryValidate(
+            "坊市购买22906fc8-99c2-4356-a466-4c17e3d8dcb5", "小小", false, out var command));
+        Assert.Equal("坊市购买22906fc8-99c2-4356-a466-4c17e3d8dcb5", command);
+    }
+
+    [Fact]
     public async Task RapidOcrV5_RecognizesChineseMarketLineAndCoordinates()
     {
         using var bitmap = new Bitmap(620, 120);

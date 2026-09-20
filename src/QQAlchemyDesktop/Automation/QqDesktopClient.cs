@@ -479,6 +479,8 @@ public sealed class QqDesktopClient
         try
         {
             var settings = await RequireVerifiedCalibrationAsync(cancellationToken);
+            var behavior = await _store.GetSettingAsync<AlchemySettings>("alchemy", cancellationToken) ?? new AlchemySettings();
+            var requireBotMention = !behavior.AllowUnmentionedCommands;
             if (!await VerifyGroupOnlyAsync(settings, cancellationToken))
                 throw new InvalidOperationException("当前 QQ 群标题与校准配置不一致，拒绝发送");
             if (!TryLocateWindow(out var process, out var hwnd) || process is null) throw new InvalidOperationException("QQ 窗口已丢失");
@@ -489,13 +491,20 @@ public sealed class QqDesktopClient
             await Task.Delay(150, cancellationToken);
             KeyChord(NativeMethods.VkControl, NativeMethods.VkA);
             KeyPress(NativeMethods.VkBack);
-            SendUnicode($"@{settings.GameBotDisplayName}");
-            await Task.Delay(700, cancellationToken);
-            if (!await TrySelectExactMentionWithUiaAsync(process, settings, cancellationToken) &&
-                !await TrySelectExactMentionWithOcrAsync(settings, cancellationToken))
-                throw new InvalidOperationException($"无法在 @ 建议中同时确认 {settings.GameBotDisplayName} 和 QQ {settings.GameBotQq}，拒绝发送");
-            await Task.Delay(250, cancellationToken);
-            SendUnicode($" {command}");
+            if (requireBotMention)
+            {
+                SendUnicode($"@{settings.GameBotDisplayName}");
+                await Task.Delay(700, cancellationToken);
+                if (!await TrySelectExactMentionWithUiaAsync(process, settings, cancellationToken) &&
+                    !await TrySelectExactMentionWithOcrAsync(settings, cancellationToken))
+                    throw new InvalidOperationException($"无法在 @ 建议中同时确认 {settings.GameBotDisplayName} 和 QQ {settings.GameBotQq}，拒绝发送");
+                await Task.Delay(250, cancellationToken);
+                SendUnicode($" {command}");
+            }
+            else
+            {
+                SendUnicode(command);
+            }
             await Task.Delay(200, cancellationToken);
             if (!TryClickSendButton(settings))
                 throw new InvalidOperationException("已选中 @候选并填入命令，但没有找到 QQ 的“发送”按钮，拒绝发送");
@@ -513,6 +522,8 @@ public sealed class QqDesktopClient
         try
         {
             var settings = await RequireVerifiedCalibrationAsync(cancellationToken);
+            var behavior = await _store.GetSettingAsync<AlchemySettings>("alchemy", cancellationToken) ?? new AlchemySettings();
+            var requireBotMention = !behavior.AllowUnmentionedCommands;
             if (!await VerifyGroupOnlyAsync(settings, cancellationToken))
                 throw new InvalidOperationException("当前 QQ 群标题不匹配，拒绝点击");
             var fresh = await ObserveRegionTwiceAsync(settings.ChatRegion, cancellationToken);
@@ -552,7 +563,7 @@ public sealed class QqDesktopClient
             await Task.Delay(450, cancellationToken);
 
             var preparedText = TryReadInputText(process, settings);
-            if (!PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName, out var command))
+            if (!PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName, requireBotMention, out var command))
             {
                 try
                 {
@@ -564,10 +575,11 @@ public sealed class QqDesktopClient
                     preparedText = "";
                 }
             }
-            if (!PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName, out command))
+            if (!PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName, requireBotMention, out command))
             {
                 ClearInput(input);
-                throw new InvalidOperationException("点击药材后未能确认输入框中的 @机器人、坊市购买命令和采购码，已清空并拒绝发送");
+                var mentionHint = requireBotMention ? "@机器人、" : "";
+                throw new InvalidOperationException($"点击药材后未能确认输入框中的 {mentionHint}坊市购买命令和采购码，已清空并拒绝发送");
             }
             if (!TryClickSendButton(settings))
             {

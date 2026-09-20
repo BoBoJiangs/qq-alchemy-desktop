@@ -8,13 +8,17 @@ public static partial class PurchaseCommandValidator
     private static partial Regex CommandPattern();
 
     public static bool TryValidate(string text, string botDisplayName, out string command)
+        => TryValidate(text, botDisplayName, requireBotMention: true, out command);
+
+    public static bool TryValidate(string text, string botDisplayName, bool requireBotMention, out string command)
     {
         var normalized = text.Replace("\r", "", StringComparison.Ordinal)
             .Replace("\n", " ", StringComparison.Ordinal)
             .Trim();
         var match = CommandPattern().Match(normalized);
-        if (!match.Success || string.IsNullOrWhiteSpace(botDisplayName) ||
-            !normalized.Contains(botDisplayName.Trim(), StringComparison.Ordinal))
+        var hasBotMention = !string.IsNullOrWhiteSpace(botDisplayName) &&
+            normalized.Contains(botDisplayName.Trim(), StringComparison.Ordinal);
+        if (!match.Success || (requireBotMention && !hasBotMention))
         {
             command = "";
             return false;

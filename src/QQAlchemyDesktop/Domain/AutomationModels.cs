@@ -73,6 +73,7 @@ public sealed class AlchemySettings
     public int TaskPurchaseLimit { get; set; } = 50;
     public int EmptyMarketRoundsBeforeStop { get; set; } = 3;
     public bool DryRun { get; set; } = true;
+    public bool AllowUnmentionedCommands { get; set; }
 }
 
 public sealed record PurchaseRule(
