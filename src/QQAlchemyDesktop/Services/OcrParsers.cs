@@ -110,7 +110,8 @@ public static partial class MarketParser
                     NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var price)) continue;
             if (priceMatch.Groups["unit"].Value == "亿") price *= 10_000d;
 
-            var herbWord = line.Select(word => (Word: word, Name: resolver.Resolve(word.Text)))
+            var herbWord = line.Where(word => word.Confidence >= 0.65d)
+                .Select(word => (Word: word, Name: resolver.Resolve(word.Text)))
                 .FirstOrDefault(x => x.Name is not null);
             if (herbWord.Name is null) continue;
             var rect = herbWord.Word.Bounds;

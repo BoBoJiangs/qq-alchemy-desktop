@@ -29,8 +29,9 @@ public sealed class WindowsCaptureIntegrationTests
             using var bitmap = await capture.CaptureAsync(handle);
             Assert.True(bitmap.Width > 100);
             Assert.True(bitmap.Height > 100);
-            var observation = await new WindowsOcrService().RecognizeAsync(bitmap);
+            var observation = await new RapidOcrService().RecognizeAsync(bitmap);
             Assert.Equal(64, observation.FrameHash.Length);
+            Assert.Contains("药材背包", observation.RawText);
         }
         finally
         {

@@ -96,7 +96,7 @@ public sealed record MarketListing(
     string ListingToken,
     string RawText);
 
-public sealed record OcrWordData(string Text, PixelRect Bounds);
+public sealed record OcrWordData(string Text, PixelRect Bounds, double Confidence = 1d);
 
 public sealed record OcrObservation(
     string RawText,

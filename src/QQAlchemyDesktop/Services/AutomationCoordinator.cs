@@ -249,7 +249,8 @@ public sealed class AutomationCoordinator : BackgroundService
                         await HandleMarketLockedAsync(marketResponse, cancellationToken);
                     break;
                 case AutomationState.WaitingPurchaseResult:
-                    await HandlePurchaseResultLockedAsync(OcrResponseGate.LatestText(observation), cancellationToken);
+                    if (_lastQuery is not null && OcrResponseGate.TryExtractAfterCommand(observation, _lastQuery, out var purchaseResponse))
+                        await HandlePurchaseResultLockedAsync(OcrResponseGate.LatestText(purchaseResponse), cancellationToken);
                     break;
                 case AutomationState.WaitingAlchemyResult:
                     if (_lastQuery is not null && OcrResponseGate.TryExtractAfterCommand(observation, _lastQuery, out var alchemyResponse))
@@ -345,11 +346,13 @@ public sealed class AutomationCoordinator : BackgroundService
                 return;
             }
             _pendingListing = selected;
-            _checkpoint.State = AutomationState.WaitingPurchaseResult;
-            _checkpoint.Step = $"等待购买结果：{selected.HerbName} {selected.PriceWan:0.####}万";
+            _checkpoint.Step = $"准备购买：{selected.HerbName} {selected.PriceWan:0.####}万";
             _checkpoint.PendingActionId = selected.ListingToken;
             await DelayActionAsync(settings, cancellationToken);
-            await _qq.ClickListingAsync(selected, cancellationToken);
+            await _qq.ClickAndSendListingAsync(selected, cancellationToken);
+            _lastQuery = "坊市购买";
+            _checkpoint.State = AutomationState.WaitingPurchaseResult;
+            _checkpoint.Step = $"等待购买结果：{selected.HerbName} {selected.PriceWan:0.####}万";
             _deadline = DateTimeOffset.Now.AddSeconds(20);
             return;
         }

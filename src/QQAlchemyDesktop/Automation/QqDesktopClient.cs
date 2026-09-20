@@ -14,13 +14,13 @@ namespace QQAlchemyDesktop.Automation;
 [SupportedOSPlatform("windows10.0.19041.0")]
 public sealed class QqDesktopClient
 {
-    private readonly WindowsOcrService _ocr;
+    private readonly RapidOcrService _ocr;
     private readonly WindowsGraphicsCaptureService _capture;
     private readonly SqliteStore _store;
     private readonly AppPaths _paths;
     private readonly SemaphoreSlim _inputGate = new(1, 1);
 
-    public QqDesktopClient(WindowsOcrService ocr, WindowsGraphicsCaptureService capture, SqliteStore store, AppPaths paths)
+    public QqDesktopClient(RapidOcrService ocr, WindowsGraphicsCaptureService capture, SqliteStore store, AppPaths paths)
     {
         _ocr = ocr;
         _capture = capture;
@@ -507,7 +507,7 @@ public sealed class QqDesktopClient
         }
     }
 
-    public async Task ClickListingAsync(MarketListing listing, CancellationToken cancellationToken = default)
+    public async Task<string> ClickAndSendListingAsync(MarketListing listing, CancellationToken cancellationToken = default)
     {
         await _inputGate.WaitAsync(cancellationToken);
         try
@@ -522,8 +522,16 @@ public sealed class QqDesktopClient
                 throw new InvalidOperationException("QQ 窗口已丢失");
             RestoreAndActivate(hwnd);
             NativeMethods.GetWindowRect(hwnd, out var nativeRect);
-            var chat = settings.ChatRegion.ToPixels(nativeRect.ToRectangle());
+            var windowBounds = nativeRect.ToRectangle();
+            var chat = settings.ChatRegion.ToPixels(windowBounds);
+            var input = settings.InputRegion.ToPixels(windowBounds);
             var point = new Point(chat.Left + listing.ClickRect.Center.X, chat.Top + listing.ClickRect.Center.Y);
+
+            Click(input.Left + input.Width / 2, input.Top + input.Height / 2);
+            await Task.Delay(120, cancellationToken);
+            KeyChord(NativeMethods.VkControl, NativeMethods.VkA);
+            KeyPress(NativeMethods.VkBack);
+            await Task.Delay(120, cancellationToken);
 
             var invoked = false;
             try
@@ -541,13 +549,77 @@ public sealed class QqDesktopClient
                 invoked = false;
             }
             if (!invoked) Click(point.X, point.Y);
-            await _store.AuditAsync("info", "market_listing_clicked",
-                $"{listing.HerbName} {listing.PriceWan:0.####}万 page={listing.Page}", listing.ListingToken, cancellationToken);
+            await Task.Delay(450, cancellationToken);
+
+            var preparedText = TryReadInputText(process, settings);
+            if (!PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName, out var command))
+            {
+                try
+                {
+                    var inputObservation = await ObserveRegionTwiceAsync(settings.InputRegion, cancellationToken);
+                    preparedText = inputObservation.RawText;
+                }
+                catch (OcrConflictException)
+                {
+                    preparedText = "";
+                }
+            }
+            if (!PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName, out command))
+            {
+                ClearInput(input);
+                throw new InvalidOperationException("点击药材后未能确认输入框中的 @机器人、坊市购买命令和采购码，已清空并拒绝发送");
+            }
+            if (!TryClickSendButton(settings))
+            {
+                ClearInput(input);
+                throw new InvalidOperationException("采购命令已生成并通过校验，但没有找到 QQ 的“发送”按钮，已清空并拒绝发送");
+            }
+            await _store.AuditAsync("info", "market_purchase_sent",
+                $"{listing.HerbName} {listing.PriceWan:0.####}万 page={listing.Page} command={command}",
+                listing.ListingToken, cancellationToken);
+            return command;
         }
         finally
         {
             _inputGate.Release();
         }
+    }
+
+    private static string TryReadInputText(Process process, CalibrationSettings settings)
+    {
+        try
+        {
+            using var app = FlaUI.Core.Application.Attach(process);
+            using var automation = new UIA3Automation();
+            var window = app.GetMainWindow(automation, TimeSpan.FromSeconds(2));
+            if (window is null || !TryLocateWindowBounds(out var nativeBounds)) return "";
+            var inputBounds = settings.InputRegion.ToPixels(nativeBounds);
+            var edit = window.FindAllDescendants(cf => cf.ByControlType(ControlType.Edit))
+                .Where(element => element.BoundingRectangle.Width > 20 && element.BoundingRectangle.Height > 8)
+                .Where(element => element.BoundingRectangle.Left < inputBounds.Right &&
+                                  element.BoundingRectangle.Right > inputBounds.Left &&
+                                  element.BoundingRectangle.Top < inputBounds.Bottom &&
+                                  element.BoundingRectangle.Bottom > inputBounds.Top)
+                .OrderByDescending(element => element.BoundingRectangle.Width * element.BoundingRectangle.Height)
+                .FirstOrDefault();
+            if (edit is null) return "";
+            var value = "";
+            try { value = edit.AsTextBox().Text ?? ""; } catch { /* rich edit may not expose ValuePattern */ }
+            if (!string.IsNullOrWhiteSpace(value)) return value;
+            return GetAccessibleElementText(edit);
+        }
+        catch
+        {
+            return "";
+        }
+    }
+
+    private static void ClearInput(Rectangle input)
+    {
+        Click(input.Left + input.Width / 2, input.Top + input.Height / 2);
+        Thread.Sleep(80);
+        KeyChord(NativeMethods.VkControl, NativeMethods.VkA);
+        KeyPress(NativeMethods.VkBack);
     }
 
     public string SaveScreenshot(string prefix = "failure")

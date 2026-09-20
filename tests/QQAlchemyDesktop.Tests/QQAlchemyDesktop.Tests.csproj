@@ -19,4 +19,12 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\QQAlchemyDesktop\QQAlchemyDesktop.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\src\QQAlchemyDesktop\models\**\*" Link="models\%(RecursiveDir)%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="Fixtures\market-sample.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
 </Project>

@@ -21,7 +21,7 @@ internal static class Program
             options.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
         builder.Services.AddSingleton<AppPaths>();
         builder.Services.AddSingleton<SqliteStore>();
-        builder.Services.AddSingleton<WindowsOcrService>();
+        builder.Services.AddSingleton<RapidOcrService>();
         builder.Services.AddSingleton<WindowsGraphicsCaptureService>();
         builder.Services.AddSingleton<QqDesktopClient>();
         builder.Services.AddSingleton<RecipeCalculator>();
