@@ -69,7 +69,13 @@ async function busy(button, action) { button.disabled = true; try { await action
 document.querySelectorAll('[data-action]').forEach(button => button.addEventListener('click', () => busy(button, async () => { await api(button.dataset.action, { method:'POST' }); toast('操作已提交'); await refreshStatus(); await refreshAudit(); })));
 $('importBtn').addEventListener('click', () => busy($('importBtn'), async () => { const result = await api('/api/import', { method:'POST', body:JSON.stringify({ sourceRoot:$('sourceRoot').value, accountId:$('accountId').value }) }); $('importResult').textContent = `已复制 ${result.import.copied.length} 个文件，生成 ${result.recipeCount} 条规范化配方。`; toast('旧数据导入完成'); await refreshSettings(); await refreshAudit(); }));
 $('calibrateBtn').addEventListener('click', () => busy($('calibrateBtn'), async () => { const result = await api('/api/calibration/start', { method:'POST', body:JSON.stringify({ groupName:$('groupName').value, gameBotDisplayName:$('botName').value, gameBotQq:Number($('botQq').value) }) }); $('calibrationResult').textContent = `检测到 QQ ${result.qqVersion || '未知版本'}，窗口 ${result.windowWidth}×${result.windowHeight}，DPI ${result.dpi}。`; toast('窗口探测完成，请继续验证'); }));
-$('verifyBtn').addEventListener('click', () => busy($('verifyBtn'), async () => { await api('/api/calibration/verify', { method:'POST' }); $('calibrationResult').textContent = '校准验证通过。'; toast('校准验证通过'); await refreshStatus(); }));
+$('verifyBtn').addEventListener('click', () => busy($('verifyBtn'), async () => {
+  const alchemy = { ...(currentSettings?.alchemy || {}), allowUnmentionedCommands:$('allowUnmentionedSetting').checked };
+  await api('/api/settings/alchemy', { method:'PUT', body:JSON.stringify(alchemy) });
+  currentSettings.alchemy = alchemy;
+  await api('/api/calibration/verify', { method:'POST' });
+  $('calibrationResult').textContent = '校准验证通过。'; toast('校准验证通过'); await refreshStatus();
+}));
 $('saveSettingsBtn').addEventListener('click', () => busy($('saveSettingsBtn'), async () => { const s = { ...(currentSettings?.alchemy || {}), danNumber:Number($('danNumber').value), alchemy:$('alchemyMode').value === 'true', alchemyNumber:Number($('alchemyNumber').value), makeNumber:Number($('makeNumber').value), taskPurchaseLimit:Number($('taskPurchaseLimit').value), emptyMarketRoundsBeforeStop:Number($('emptyRounds').value), limitHerbsCount:Number($('limitHerbsCount').value), randomDelay:Number($('randomDelay').value), dryRun:$('dryRunSetting').checked, allowUnmentionedCommands:$('allowUnmentionedSetting').checked }; await api('/api/settings/alchemy', { method:'PUT', body:JSON.stringify(s) }); currentSettings.alchemy = s; toast('安全设置已保存'); await refreshStatus(); }));
 $('saveRulesBtn').addEventListener('click', () => busy($('saveRulesBtn'), async () => {
   const rules = $('rulesText').value.split(/\r?\n/).map((line, index) => line.trim()).filter(Boolean).map((line, index) => {
