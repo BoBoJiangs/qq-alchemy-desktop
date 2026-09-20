@@ -15,7 +15,11 @@ internal static class Program
     private static async Task Main(string[] args)
     {
         ApplicationConfiguration.Initialize();
-        var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = args });
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            Args = args,
+            ContentRootPath = AppContext.BaseDirectory
+        });
         builder.WebHost.UseUrls("http://127.0.0.1:62346");
         builder.Services.Configure<JsonOptions>(options =>
             options.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
