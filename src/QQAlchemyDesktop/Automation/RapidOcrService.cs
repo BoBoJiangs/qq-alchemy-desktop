@@ -1,5 +1,6 @@
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using QQAlchemyDesktop.Domain;
 using RapidOCRLib;
@@ -37,7 +38,10 @@ public sealed class RapidOcrService
         {
             await _initialization;
             cancellationToken.ThrowIfCancellationRequested();
-            using var scaled = Scale(bitmap, ScaleFactor);
+            // 卡片里的蓝色文字（药材名链接、页码、拥有数量）会被 PP-OCR 漏读；
+            // 逐像素取 min(r,g,b) 把彩色文字统一压成黑字白底后再识别。
+            using var boosted = BoostColoredText(bitmap);
+            using var scaled = Scale(boosted, ScaleFactor);
             var result = await _engine.DetectAsync(scaled, padding: 0,
                 maxSideLen: Math.Max(scaled.Width, scaled.Height), boxScoreThresh: 0.55f,
                 boxThresh: 0.3f, unClipRatio: 1.6f, doAngle: false, mostAngle: false);
@@ -93,6 +97,41 @@ public sealed class RapidOcrService
         }
         return string.Join('\n', lines.Select(line =>
             string.Concat(line.OrderBy(word => word.Bounds.X).Select(word => word.Text))));
+    }
+
+    /// <summary>逐像素取 min(r,g,b)：彩色/蓝色文字压深、白色背景保持，提升小字号彩字的识别率。</summary>
+    private static Bitmap BoostColoredText(Bitmap source)
+    {
+        var result = new Bitmap(source.Width, source.Height, PixelFormat.Format32bppArgb);
+        var srcData = source.LockBits(new Rectangle(0, 0, source.Width, source.Height), ImageLockMode.ReadOnly,
+            PixelFormat.Format32bppArgb);
+        try
+        {
+            var dstData = result.LockBits(new Rectangle(0, 0, result.Width, result.Height), ImageLockMode.WriteOnly,
+                PixelFormat.Format32bppArgb);
+            try
+            {
+                var bytes = new byte[srcData.Stride * source.Height];
+                Marshal.Copy(srcData.Scan0, bytes, 0, bytes.Length);
+                for (var offset = 0; offset + 3 < bytes.Length; offset += 4)
+                {
+                    var value = Math.Min(bytes[offset], Math.Min(bytes[offset + 1], bytes[offset + 2]));
+                    bytes[offset] = value;
+                    bytes[offset + 1] = value;
+                    bytes[offset + 2] = value;
+                }
+                Marshal.Copy(bytes, 0, dstData.Scan0, bytes.Length);
+            }
+            finally
+            {
+                result.UnlockBits(dstData);
+            }
+        }
+        finally
+        {
+            source.UnlockBits(srcData);
+        }
+        return result;
     }
 
     private static Bitmap Scale(Bitmap source, int factor)
