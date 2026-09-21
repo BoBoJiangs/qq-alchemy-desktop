@@ -1100,27 +1100,10 @@ public sealed class QqDesktopClient
             }
             if (command is null)
             {
-                // QQNT may expose the link as Invoke-capable while doing
-                // nothing when Invoke is called.  Retry with a real click,
-                // then validate the generated command again before sending.
-                ClearInput(input);
-                Click(point.X, point.Y);
-                await Task.Delay(PurchaseCodePostClickDelayMilliseconds, cancellationToken);
-                command = await WaitForPurchaseCommandAsync(process, settings, cancellationToken);
-                if (command is null)
-                {
-                    preparedText = await RecognizeInputOnceAsync(settings, cancellationToken);
-                    if (PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName,
-                            requireBotMention: false, out var retryCommand)) command = retryCommand;
-                }
-            }
-            if (command is null)
-            {
-                // On some QQNT cards the visible item name is a decorative
-                // hyperlink and the actionable purchase link is the
-                // "物品功效" link immediately to its left/above.  Try that
-                // adjacent link only as a last resort; sending still requires
-                // a validated purchase code below.
+                // On the current QQNT market card the visible herb name is
+                // usually decorative; the actionable purchase link is the
+                // adjacent “物品功效” link. Try that proven target before
+                // spending another OCR round on the same decorative link.
                 var effectPoint = new Point(point.X - 100, point.Y - 24);
                 await _store.AuditAsync("info", "market_click_effect_fallback",
                     $"{listing.HerbName} screen={effectPoint.X},{effectPoint.Y}",
@@ -1133,6 +1116,22 @@ public sealed class QqDesktopClient
                     preparedText = await RecognizeInputOnceAsync(settings, cancellationToken, expandRegion: true);
                     if (PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName,
                             requireBotMention: false, out var effectCommand)) command = effectCommand;
+                }
+            }
+            if (command is null)
+            {
+                // Some QQNT versions delay the first clickable-point event.
+                // Keep the original herb-name click as a final fallback, but
+                // still require a validated UUID before returning.
+                ClearInput(input);
+                Click(point.X, point.Y);
+                await Task.Delay(PurchaseCodePostClickDelayMilliseconds, cancellationToken);
+                command = await WaitForPurchaseCommandAsync(process, settings, cancellationToken);
+                if (command is null)
+                {
+                    preparedText = await RecognizeInputOnceAsync(settings, cancellationToken);
+                    if (PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName,
+                            requireBotMention: false, out var retryCommand)) command = retryCommand;
                 }
             }
             if (command is null)
