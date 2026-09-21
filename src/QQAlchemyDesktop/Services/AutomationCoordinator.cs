@@ -245,8 +245,8 @@ public sealed class AutomationCoordinator : BackgroundService
             if (DateTimeOffset.UtcNow >= _nextAccessibleProbe)
             {
                 _nextAccessibleProbe = DateTimeOffset.UtcNow.AddSeconds(2);
-                var accessibleText = string.Join("\n", _qq.GetAccessibleTexts());
-                if (MessageClassifier.IsCaptcha(accessibleText))
+                var accessibleTexts = _qq.GetAccessibleTexts();
+                if (HasCaptchaAfterLatestCommand(accessibleTexts, _lastQuery))
                 {
                     await PauseLockedAsync(AutomationState.PausedCaptcha,
                         "检测到验证码，请人工处理后恢复", cancellationToken);
@@ -578,5 +578,23 @@ public sealed class AutomationCoordinator : BackgroundService
         _lastQuery = null;
         _candidates.Clear();
         _alchemyQueue.Clear();
+    }
+
+    internal static bool HasCaptchaAfterLatestCommand(IReadOnlyList<string> accessibleTexts,
+        string? latestCommand)
+    {
+        if (string.IsNullOrWhiteSpace(latestCommand)) return false;
+        var commandIndex = -1;
+        for (var i = accessibleTexts.Count - 1; i >= 0; i--)
+        {
+            if (accessibleTexts[i].Contains(latestCommand, StringComparison.Ordinal))
+            {
+                commandIndex = i;
+                break;
+            }
+        }
+        return commandIndex >= 0 && accessibleTexts
+            .Skip(commandIndex + 1)
+            .Any(text => MessageClassifier.IsCaptcha(text));
     }
 }

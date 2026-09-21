@@ -72,6 +72,17 @@ public sealed class CoreTests : IDisposable
     }
 
     [Fact]
+    public void CaptchaGuard_IgnoresHistoricalCaptchaBeforeLatestCommand()
+    {
+        Assert.False(AutomationCoordinator.HasCaptchaAfterLatestCommand([
+            "请点击图中第2个表情对应的按钮", "药材背包", "一心的药材背包"
+        ], "药材背包"));
+        Assert.True(AutomationCoordinator.HasCaptchaAfterLatestCommand([
+            "药材背包", "一心的药材背包", "请点击图中第2个表情对应的按钮"
+        ], "药材背包"));
+    }
+
+    [Fact]
     public void MarketParser_ConvertsYiToWanAndKeepsClickRect()
     {
         var observation = new OcrObservation("玄冰花 价格 1.2 亿", [
