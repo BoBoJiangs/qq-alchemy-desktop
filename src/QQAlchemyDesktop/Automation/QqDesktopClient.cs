@@ -26,9 +26,9 @@ public sealed class QqDesktopClient
     // immediately.  Poll the control briefly before falling back to one OCR
     // read; the old fixed 450ms + two-frame OCR path made every listing wait
     // several seconds even when UIA already exposed the UUID.
-    private const int PurchaseCodePostClickDelayMilliseconds = 220;
-    private const int PurchaseCodePollMilliseconds = 70;
-    private const int PurchaseCodePollTimeoutMilliseconds = 800;
+    private const int PurchaseCodePostClickDelayMilliseconds = 180;
+    private const int PurchaseCodePollMilliseconds = 60;
+    private const int PurchaseCodePollTimeoutMilliseconds = 350;
 
     public QqDesktopClient(RapidOcrService ocr, WindowsGraphicsCaptureService capture, SqliteStore store, AppPaths paths)
     {
@@ -1111,7 +1111,7 @@ public sealed class QqDesktopClient
                 command = await WaitForPurchaseCommandAsync(process, settings, cancellationToken);
                 if (command is null)
                 {
-                    preparedText = await RecognizeInputOnceAsync(settings, cancellationToken);
+                    preparedText = await RecognizeInputOnceAsync(settings, cancellationToken, expandRegion: true);
                     if (PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName,
                             requireBotMention: false, out var effectCommand)) command = effectCommand;
                 }
@@ -1153,9 +1153,13 @@ public sealed class QqDesktopClient
     }
 
     private async Task<string> RecognizeInputOnceAsync(CalibrationSettings settings,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, bool expandRegion = false)
     {
-        using var bitmap = await CaptureRegionAsync(ExpandChatRegion(settings.InputRegion), cancellationToken);
+        // The command is typed in the calibrated edit box.  OCRing that
+        // narrow region avoids running recognition over the whole chat card;
+        // only the last-resort adjacent-link retry needs the expanded crop.
+        var region = expandRegion ? ExpandChatRegion(settings.InputRegion) : settings.InputRegion;
+        using var bitmap = await CaptureRegionAsync(region, cancellationToken);
         var observation = await _ocr.RecognizeAsync(bitmap, cancellationToken);
         return observation.RawText;
     }
