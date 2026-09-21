@@ -1200,7 +1200,12 @@ public sealed class QqDesktopClient
         var secondMatches = ExtractMentionMatches(second, settings, mentionPixels, inputPixels);
         if (firstMatches.Count != 1 || secondMatches.Count != 1 ||
             !string.Equals(firstMatches[0].Signature, secondMatches[0].Signature, StringComparison.Ordinal))
+        {
+            await RecordOcrAuditAsync("warn", "mention_ocr_candidates",
+                $"first={string.Join("|", firstMatches.Select(x => x.Text))}; " +
+                $"second={string.Join("|", secondMatches.Select(x => x.Text))}");
             return false;
+        }
         var match = secondMatches[0];
         Click(mentionPixels.Left + match.Bounds.Center.X, mentionPixels.Top + match.Bounds.Center.Y);
         return true;
