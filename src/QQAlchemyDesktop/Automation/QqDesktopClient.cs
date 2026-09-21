@@ -164,9 +164,22 @@ public sealed class QqDesktopClient
         (text.Contains("拥有数量", StringComparison.Ordinal) ||
          text.Contains("数量", StringComparison.Ordinal));
 
-    internal static bool HasPurchaseSuccessFor(string text, string herbName) =>
-        MessageClassifier.IsPurchaseSuccess(text) &&
-        text.Contains(herbName, StringComparison.Ordinal);
+    internal static bool HasPurchaseSuccessFor(string text, string herbName)
+    {
+        // QQNT decorates hyperlink names with zero-width markers (for
+        // example: "三尾\u200b风叶\u200b").  They are not visible to the user,
+        // but an ordinal substring check would reject an otherwise valid
+        // purchase confirmation and force the slow OCR fallback.
+        var normalizedText = NormalizeAccessibleMatchText(text);
+        var normalizedHerbName = NormalizeAccessibleMatchText(herbName);
+        return MessageClassifier.IsPurchaseSuccess(normalizedText) &&
+               normalizedHerbName.Length > 0 &&
+               normalizedText.Contains(normalizedHerbName, StringComparison.Ordinal);
+    }
+
+    internal static string NormalizeAccessibleMatchText(string value) =>
+        string.Concat(value.Where(character => !char.IsWhiteSpace(character) &&
+            character is not ('\u200B' or '\u200C' or '\u200D' or '\u200E' or '\u200F' or '\u2060' or '\uFEFF')));
 
     /// <summary>
     /// Detect a captcha only when its UIA text node has a real on-screen

@@ -137,6 +137,8 @@ public sealed class OcrAutomationTests
         Assert.False(QqDesktopClient.HasInventoryPayload("药材背包"));
         Assert.True(QqDesktopClient.HasPurchaseSuccessFor("道友成功购买九叶芝，消耗灵石320万", "九叶芝"));
         Assert.False(QqDesktopClient.HasPurchaseSuccessFor("道友成功购买五柳根，消耗灵石320万", "九叶芝"));
+        Assert.True(QqDesktopClient.HasPurchaseSuccessFor("道友成功购买三尾\u200b风叶\u200b，消耗灵石3700000枚", "三尾风叶"));
+        Assert.Equal("三尾风叶", QqDesktopClient.NormalizeAccessibleMatchText("三尾\u200b风叶\u200b"));
     }
 
     [Fact]
