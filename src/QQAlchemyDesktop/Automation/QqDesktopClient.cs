@@ -1851,8 +1851,52 @@ public sealed class QqDesktopClient
     private static void RestoreAndActivate(IntPtr hwnd)
     {
         if (NativeMethods.IsIconic(hwnd)) NativeMethods.ShowWindow(hwnd, NativeMethods.SwRestore);
-        if (!NativeMethods.SetForegroundWindow(hwnd)) throw new InvalidOperationException("无法激活 QQ 窗口");
-        Thread.Sleep(120);
+        var currentThread = NativeMethods.GetCurrentThreadId();
+        var targetThread = NativeMethods.GetWindowThreadProcessId(hwnd, out _);
+        for (var attempt = 0; attempt < 4; attempt++)
+        {
+            if (NativeMethods.SetForegroundWindow(hwnd) &&
+                NativeMethods.GetForegroundWindow() == hwnd)
+            {
+                Thread.Sleep(120);
+                return;
+            }
+
+            // Windows prevents a background process from stealing focus in
+            // many normal desktop situations. Temporarily attach the QQ and
+            // foreground input queues so the same activation works after the
+            // user or another app has taken focus between paged queries.
+            var foreground = NativeMethods.GetForegroundWindow();
+            var foregroundThread = foreground == IntPtr.Zero
+                ? 0u
+                : NativeMethods.GetWindowThreadProcessId(foreground, out _);
+            var attachedForeground = foregroundThread != 0 && foregroundThread != currentThread &&
+                                     NativeMethods.AttachThreadInput(currentThread, foregroundThread, true);
+            var attachedTarget = targetThread != 0 && targetThread != currentThread &&
+                                 targetThread != foregroundThread &&
+                                 NativeMethods.AttachThreadInput(currentThread, targetThread, true);
+            try
+            {
+                NativeMethods.BringWindowToTop(hwnd);
+                NativeMethods.SetActiveWindow(hwnd);
+                NativeMethods.SetForegroundWindow(hwnd);
+                NativeMethods.SetFocus(hwnd);
+            }
+            finally
+            {
+                if (attachedTarget) NativeMethods.AttachThreadInput(currentThread, targetThread, false);
+                if (attachedForeground) NativeMethods.AttachThreadInput(currentThread, foregroundThread, false);
+            }
+
+            if (NativeMethods.GetForegroundWindow() == hwnd)
+            {
+                Thread.Sleep(120);
+                return;
+            }
+            Thread.Sleep(120);
+        }
+
+        throw new InvalidOperationException("无法激活 QQ 窗口");
     }
 
     private static void Click(int screenX, int screenY)

@@ -202,6 +202,13 @@ public sealed class CoreTests : IDisposable
         Assert.Equal(expected, QqDesktopClient.IsUsableWindowBounds(width, height));
 
     [Fact]
+    public void QqWindowLocator_UsesStableMinimumWindowSizeForActivation()
+    {
+        Assert.False(QqDesktopClient.IsUsableWindowBounds(399, 300));
+        Assert.True(QqDesktopClient.IsUsableWindowBounds(400, 300));
+    }
+
+    [Fact]
     public void QqCalibration_FallsBackToLastAccessiblePageMarker()
     {
         var page = QqDesktopClient.ParsePageStateFromAccessibleTexts([
