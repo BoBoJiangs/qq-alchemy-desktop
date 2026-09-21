@@ -189,10 +189,14 @@ public sealed class CoreTests : IDisposable
     {
         Assert.Equal((300, 300), AutomationCoordinator.GetActionDelayBounds(
             0, AutomationCoordinator.ActionDelayKind.Purchase));
+        Assert.Equal((650, 650), AutomationCoordinator.GetActionDelayBounds(
+            0, AutomationCoordinator.ActionDelayKind.InventoryQuery));
         Assert.Equal((1200, 3200), AutomationCoordinator.GetActionDelayBounds(
             2, AutomationCoordinator.ActionDelayKind.Query));
         Assert.Equal(180, AutomationCoordinator.GetPollingDelayMilliseconds(
             AutomationState.WaitingPurchaseResult));
+        Assert.Equal(180, AutomationCoordinator.GetPollingDelayMilliseconds(
+            AutomationState.ReadingInventory));
         Assert.Equal(450, AutomationCoordinator.GetPollingDelayMilliseconds(
             AutomationState.ScanningMarket));
     }
@@ -224,6 +228,10 @@ public sealed class CoreTests : IDisposable
         Assert.Null(QqDesktopClient.ParsePageStateFromAccessibleTexts(["没有页脚"]));
         Assert.True(QqDesktopClient.HasAccessibleInventoryResponse(["一心的药材背包", "第2页/共5页"]));
         Assert.False(QqDesktopClient.HasAccessibleInventoryResponse(["坊市数据", "第2页/共5页"]));
+        Assert.True(QqDesktopClient.HasInventoryPageFor(
+            "一心的药材背包 名字：九叶芝 拥有数量：2 第2页/共5页", 2));
+        Assert.False(QqDesktopClient.HasInventoryPageFor(
+            "一心的药材背包 名字：九叶芝 拥有数量：2 第1页/共5页", 2));
     }
 
     [Fact]

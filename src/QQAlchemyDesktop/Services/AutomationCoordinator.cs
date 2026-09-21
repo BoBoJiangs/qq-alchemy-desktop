@@ -24,6 +24,7 @@ public sealed class AutomationCoordinator : BackgroundService
     private DateTimeOffset? _deadline;
     private DateTimeOffset _nextAccessibleProbe = DateTimeOffset.MinValue;
     private DateTimeOffset _nextPurchaseResultOcrProbe = DateTimeOffset.MinValue;
+    private DateTimeOffset _nextInventoryOcrProbe = DateTimeOffset.MinValue;
     private bool _queryRetried;
     private MarketListing? _pendingListing;
     private string? _lastQuery;
@@ -228,6 +229,8 @@ public sealed class AutomationCoordinator : BackgroundService
             }
 
             OcrObservation observation;
+            var inventoryUiAFastPath = false;
+            var inventoryOcrFastPath = false;
             var purchaseUiAFastPath = false;
             var purchaseOcrFastPath = false;
             if (_checkpoint.State == AutomationState.ScanningMarket)
@@ -240,10 +243,22 @@ public sealed class AutomationCoordinator : BackgroundService
                     purchaseRules.Select(rule => rule.HerbName), cancellationToken);
             }
             else if (_checkpoint.State == AutomationState.ReadingInventory &&
-                     _qq.TryObserveVisibleChat(out var accessibleObservation) &&
-                     QqDesktopClient.HasInventoryPayload(accessibleObservation.RawText))
+                     _qq.TryObserveVisibleInventoryPage(_checkpoint.CurrentPage,
+                         out var accessibleObservation))
             {
                 observation = accessibleObservation;
+                inventoryUiAFastPath = true;
+            }
+            else if (_checkpoint.State == AutomationState.ReadingInventory &&
+                     DateTimeOffset.UtcNow >= _nextInventoryOcrProbe)
+            {
+                _nextInventoryOcrProbe = DateTimeOffset.UtcNow.AddMilliseconds(600);
+                observation = await _qq.ObserveInventoryPageAsync(cancellationToken);
+                inventoryOcrFastPath = true;
+            }
+            else if (_checkpoint.State == AutomationState.ReadingInventory)
+            {
+                return;
             }
             else if (_checkpoint.State == AutomationState.WaitingPurchaseResult &&
                      _pendingListing is not null &&
@@ -312,7 +327,31 @@ public sealed class AutomationCoordinator : BackgroundService
                 // 整屏高的回复卡片会把命令行顶出可视区：统一改用可视区最底部内容做响应门。
                 case AutomationState.ReadingInventory:
                 {
-                    OcrResponseGate.TryExtractLatest(observation, 30, out var inventoryResponse);
+                    OcrObservation inventoryResponse;
+                    if (inventoryUiAFastPath || inventoryOcrFastPath)
+                    {
+                        if (_lastQuery is not null &&
+                            OcrResponseGate.TryExtractAfterCommand(observation, _lastQuery,
+                                out var pageResponse) &&
+                            QqDesktopClient.HasInventoryPageFor(pageResponse.RawText,
+                                _checkpoint.CurrentPage))
+                        {
+                            inventoryResponse = pageResponse;
+                        }
+                        else if (QqDesktopClient.HasInventoryPageFor(observation.RawText,
+                                     _checkpoint.CurrentPage))
+                        {
+                            inventoryResponse = observation;
+                        }
+                        else
+                        {
+                            return;
+                        }
+                    }
+                    else
+                    {
+                        OcrResponseGate.TryExtractLatest(observation, 30, out inventoryResponse);
+                    }
                     await HandleInventoryLockedAsync(inventoryResponse, cancellationToken);
                     break;
                 }
@@ -643,9 +682,13 @@ public sealed class AutomationCoordinator : BackgroundService
         var actionId = Guid.NewGuid().ToString("N");
         _checkpoint.PendingActionId = actionId;
         _lastQuery = command;
+        _nextInventoryOcrProbe = DateTimeOffset.MinValue;
         await _store.SaveCheckpointAsync(_checkpoint, cancellationToken);
         var settings = await _store.GetSettingAsync<AlchemySettings>("alchemy", cancellationToken) ?? new AlchemySettings();
-        await DelayActionAsync(settings, ActionDelayKind.Query, cancellationToken);
+        var delayKind = command.StartsWith("药材背包", StringComparison.Ordinal)
+            ? ActionDelayKind.InventoryQuery
+            : ActionDelayKind.Query;
+        await DelayActionAsync(settings, delayKind, cancellationToken);
         await _qq.SendAtCommandAsync(command, cancellationToken);
         _deadline = DateTimeOffset.Now.AddSeconds(20);
     }
@@ -707,6 +750,7 @@ public sealed class AutomationCoordinator : BackgroundService
     internal enum ActionDelayKind
     {
         Query,
+        InventoryQuery,
         Purchase,
         Alchemy
     }
@@ -721,13 +765,18 @@ public sealed class AutomationCoordinator : BackgroundService
         // coordinator no longer waits for a full OCR pass before dispatching
         // the next command or makes the bot look like a burst of back-to-back
         // commands.
-        var baseline = kind == ActionDelayKind.Purchase ? 300 : 1200;
+        var baseline = kind switch
+        {
+            ActionDelayKind.Purchase => 300,
+            ActionDelayKind.InventoryQuery => 650,
+            _ => 1200
+        };
         var extra = Math.Clamp(randomDelaySeconds, 0, 30) * 1000;
         return (baseline, baseline + extra);
     }
 
     internal static int GetPollingDelayMilliseconds(AutomationState state) =>
-        state == AutomationState.WaitingPurchaseResult ? 180 : 450;
+        state is AutomationState.WaitingPurchaseResult or AutomationState.ReadingInventory ? 180 : 450;
 
     private static async Task DelayActionAsync(AlchemySettings settings, ActionDelayKind kind,
         CancellationToken cancellationToken)
@@ -748,6 +797,7 @@ public sealed class AutomationCoordinator : BackgroundService
         _pendingListing = null;
         _lastQuery = null;
         _nextPurchaseResultOcrProbe = DateTimeOffset.MinValue;
+        _nextInventoryOcrProbe = DateTimeOffset.MinValue;
         _candidates.Clear();
         _marketQueue.Clear();
         _marketCommands.Clear();

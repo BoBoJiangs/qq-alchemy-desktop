@@ -149,6 +149,34 @@ public sealed class QqDesktopClient
         return true;
     }
 
+    /// <summary>
+    /// Reads an inventory card from the visible UIA tree only when its page
+    /// number matches the page currently requested by the coordinator.
+    /// Requiring the page marker prevents a still-visible old card from being
+    /// accepted immediately after a pagination command.
+    /// </summary>
+    public bool TryObserveVisibleInventoryPage(int expectedPage, out OcrObservation observation)
+    {
+        observation = default!;
+        if (expectedPage <= 0) return false;
+        var visible = GetVisibleAccessibleTexts();
+        if (visible.Count == 0) return false;
+        var raw = string.Join('\n', visible.Select(item => item.Text));
+        if (!HasInventoryPayload(raw)) return false;
+        var page = ParsePageStateFromAccessibleTexts(visible.Select(item => item.Text).ToArray());
+        if (page is null || page.Value.Current != expectedPage) return false;
+
+        var words = visible.Select(item => new OcrWordData(item.Text,
+            new PixelRect(item.Bounds.Left, item.Bounds.Top,
+                Math.Max(1, item.Bounds.Width), Math.Max(1, item.Bounds.Height)), 0.99d))
+            .ToArray();
+        var signature = string.Join('|', visible.Select(item =>
+            $"{item.Text}:{item.Bounds.Left},{item.Bounds.Top},{item.Bounds.Width},{item.Bounds.Height}"));
+        var frameHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(signature)));
+        observation = new OcrObservation(raw, words, frameHash, DateTimeOffset.Now);
+        return true;
+    }
+
     internal static bool HasUsefulChatMarker(string text) =>
         text.Contains("药材背包", StringComparison.Ordinal) ||
         text.Contains("坊市数据", StringComparison.Ordinal) ||
@@ -680,6 +708,18 @@ public sealed class QqDesktopClient
         var settings = await RequireVerifiedCalibrationAsync(cancellationToken);
         return await ObserveRegionTwiceAsync(ExpandChatRegion(settings.ChatRegion), cancellationToken,
             allowLiveRefresh: true);
+    }
+
+    /// <summary>
+    /// Performs one full-card OCR pass for an inventory page. Inventory
+    /// pagination is gated by the requested page number, so a second
+    /// consensus frame is only needed when this fast pass is inconclusive.
+    /// </summary>
+    public async Task<OcrObservation> ObserveInventoryPageAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var settings = await RequireVerifiedCalibrationAsync(cancellationToken);
+        return await RecognizeRegionAsync(ExpandChatRegion(settings.ChatRegion), cancellationToken);
     }
 
     /// <summary>
@@ -1890,6 +1930,16 @@ public sealed class QqDesktopClient
 
     internal static bool HasAccessibleInventoryResponse(IReadOnlyList<string> accessibleTexts) =>
         accessibleTexts.Any(text => text.Contains("药材背包", StringComparison.Ordinal));
+
+    internal static bool HasInventoryPageFor(string text, int expectedPage)
+    {
+        if (expectedPage <= 0 || !HasInventoryPayload(text)) return false;
+        var compact = OcrConsensus.Normalize(text);
+        var match = Regex.Match(compact, @"第(\d+)页/共(\d+)页");
+        return match.Success &&
+               int.TryParse(match.Groups[1].Value, out var current) &&
+               current == expectedPage;
+    }
 
     private static void RestoreAndActivate(IntPtr hwnd)
     {
