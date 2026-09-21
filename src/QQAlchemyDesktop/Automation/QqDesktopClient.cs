@@ -1128,11 +1128,16 @@ public sealed class QqDesktopClient
         {
             using var app = FlaUI.Core.Application.Attach(process);
             using var automation = new UIA3Automation();
-            var windows = app.GetAllTopLevelWindows(automation);
-            if (windows.Length == 0) return false;
             if (!TryLocateWindowBounds(out var nativeBounds)) return false;
             var inputBounds = settings.InputRegion.ToPixels(nativeBounds);
-            var all = windows.SelectMany(window => window.FindAllDescendants())
+            // The mention popup can be owned by a QQ helper process rather
+            // than the process that owns the chat window. Search desktop
+            // top-level windows near the input, not just app main children.
+            var roots = automation.GetDesktop().FindAllChildren()
+                .Where(root => IsNearMentionPopup(root.BoundingRectangle, inputBounds))
+                .ToArray();
+            if (roots.Length == 0) return false;
+            var all = roots.SelectMany(window => window.FindAllDescendants())
                 .Where(element => element.ControlType != ControlType.Edit)
                 .Select(element => new MentionCandidate(element, GetAccessibleElementText(element),
                     element.BoundingRectangle))
