@@ -916,6 +916,12 @@ public sealed class QqDesktopClient
             {
                 using var automation = new UIA3Automation();
                 var element = automation.FromPoint(point);
+                var elementInfo = element is null
+                    ? "null"
+                    : $"name={element.Name};type={element.ControlType};rect={element.BoundingRectangle};" +
+                      $"invoke={element.Patterns.Invoke.IsSupported}";
+                await _store.AuditAsync("info", "market_click_element",
+                    $"{listing.HerbName} {elementInfo}", listing.ListingToken, cancellationToken);
                 if (element is not null && element.Patterns.Invoke.IsSupported)
                 {
                     element.Patterns.Invoke.Pattern.Invoke();
