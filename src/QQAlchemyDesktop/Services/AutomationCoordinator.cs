@@ -229,7 +229,6 @@ public sealed class AutomationCoordinator : BackgroundService
             }
 
             OcrObservation observation;
-            var inventoryUiAFastPath = false;
             var inventoryOcrFastPath = false;
             var purchaseUiAFastPath = false;
             var purchaseOcrFastPath = false;
@@ -242,23 +241,19 @@ public sealed class AutomationCoordinator : BackgroundService
                 observation = await _qq.ObserveMarketAsync(
                     purchaseRules.Select(rule => rule.HerbName), cancellationToken);
             }
-            else if (_checkpoint.State == AutomationState.ReadingInventory &&
-                     _qq.TryObserveVisibleInventoryPage(_checkpoint.CurrentPage,
-                         out var accessibleObservation))
+            else if (_checkpoint.State == AutomationState.ReadingInventory)
             {
-                observation = accessibleObservation;
-                inventoryUiAFastPath = true;
-            }
-            else if (_checkpoint.State == AutomationState.ReadingInventory &&
-                     DateTimeOffset.UtcNow >= _nextInventoryOcrProbe)
-            {
+                // UIA exposes the current page marker faster than OCR, but
+                // QQ often omits the hyperlink herb names from its Text
+                // nodes. Treat UIA as a readiness signal only, then let OCR
+                // remain the source of truth for the inventory entries.
+                var inventoryUiAReady = _qq.TryObserveVisibleInventoryPage(
+                    _checkpoint.CurrentPage, out _);
+                if (!inventoryUiAReady && DateTimeOffset.UtcNow < _nextInventoryOcrProbe)
+                    return;
                 _nextInventoryOcrProbe = DateTimeOffset.UtcNow.AddMilliseconds(600);
                 observation = await _qq.ObserveInventoryPageAsync(cancellationToken);
                 inventoryOcrFastPath = true;
-            }
-            else if (_checkpoint.State == AutomationState.ReadingInventory)
-            {
-                return;
             }
             else if (_checkpoint.State == AutomationState.WaitingPurchaseResult &&
                      _pendingListing is not null &&
@@ -328,7 +323,7 @@ public sealed class AutomationCoordinator : BackgroundService
                 case AutomationState.ReadingInventory:
                 {
                     OcrObservation inventoryResponse;
-                    if (inventoryUiAFastPath || inventoryOcrFastPath)
+                    if (inventoryOcrFastPath)
                     {
                         if (_lastQuery is not null &&
                             OcrResponseGate.TryExtractAfterCommand(observation, _lastQuery,
@@ -768,7 +763,7 @@ public sealed class AutomationCoordinator : BackgroundService
         var baseline = kind switch
         {
             ActionDelayKind.Purchase => 300,
-            ActionDelayKind.InventoryQuery => 650,
+            ActionDelayKind.InventoryQuery => 450,
             _ => 1200
         };
         var extra = Math.Clamp(randomDelaySeconds, 0, 30) * 1000;

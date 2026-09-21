@@ -29,6 +29,8 @@ public sealed class QqDesktopClient
     private const int PurchaseCodePostClickDelayMilliseconds = 180;
     private const int PurchaseCodePollMilliseconds = 60;
     private const int PurchaseCodePollTimeoutMilliseconds = 350;
+    private const int CommandInputFocusDelayMilliseconds = 100;
+    private const int CommandPostTypeDelayMilliseconds = 120;
 
     public QqDesktopClient(RapidOcrService ocr, WindowsGraphicsCaptureService capture, SqliteStore store, AppPaths paths)
     {
@@ -1008,7 +1010,7 @@ public sealed class QqDesktopClient
             if (!NativeMethods.GetWindowRect(hwnd, out var nativeRect)) throw new InvalidOperationException("无法读取 QQ 窗口位置");
             var input = settings.InputRegion.ToPixels(nativeRect.ToRectangle());
             Click(input.Left + input.Width / 2, input.Top + input.Height / 2);
-            await Task.Delay(150, cancellationToken);
+            await Task.Delay(CommandInputFocusDelayMilliseconds, cancellationToken);
             KeyChord(NativeMethods.VkControl, NativeMethods.VkA);
             KeyPress(NativeMethods.VkBack);
             if (requireBotMention)
@@ -1025,7 +1027,7 @@ public sealed class QqDesktopClient
             {
                 SendUnicode(command);
             }
-            await Task.Delay(200, cancellationToken);
+            await Task.Delay(CommandPostTypeDelayMilliseconds, cancellationToken);
             if (!TryClickSendButton(settings))
             {
                 // UIA 忙碌找不到“发送”按钮时，直接回车发送（输入框内就是刚填入的命令）。

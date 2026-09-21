@@ -189,7 +189,7 @@ public sealed class CoreTests : IDisposable
     {
         Assert.Equal((300, 300), AutomationCoordinator.GetActionDelayBounds(
             0, AutomationCoordinator.ActionDelayKind.Purchase));
-        Assert.Equal((650, 650), AutomationCoordinator.GetActionDelayBounds(
+        Assert.Equal((450, 450), AutomationCoordinator.GetActionDelayBounds(
             0, AutomationCoordinator.ActionDelayKind.InventoryQuery));
         Assert.Equal((1200, 3200), AutomationCoordinator.GetActionDelayBounds(
             2, AutomationCoordinator.ActionDelayKind.Query));
