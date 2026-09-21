@@ -23,6 +23,7 @@ public sealed class AutomationCoordinator : BackgroundService
     private string? _lastMessageHash;
     private DateTimeOffset? _deadline;
     private DateTimeOffset _nextAccessibleProbe = DateTimeOffset.MinValue;
+    private DateTimeOffset _nextPurchaseResultOcrProbe = DateTimeOffset.MinValue;
     private bool _queryRetried;
     private MarketListing? _pendingListing;
     private string? _lastQuery;
@@ -228,6 +229,7 @@ public sealed class AutomationCoordinator : BackgroundService
 
             OcrObservation observation;
             var purchaseUiAFastPath = false;
+            var purchaseOcrFastPath = false;
             if (_checkpoint.State == AutomationState.ScanningMarket)
             {
                 var purchaseRules = await _store.GetSettingAsync<List<PurchaseRule>>("purchaseRules",
@@ -254,6 +256,24 @@ public sealed class AutomationCoordinator : BackgroundService
                 // so an older success for another listing cannot be consumed.
                 observation = purchaseAccessibleObservation;
                 purchaseUiAFastPath = true;
+            }
+            else if (_checkpoint.State == AutomationState.WaitingPurchaseResult &&
+                     _pendingListing is not null &&
+                     DateTimeOffset.UtcNow >= _nextPurchaseResultOcrProbe)
+            {
+                // Purchase replies appear at the bottom of the chat.  A
+                // single OCR pass over that small, recent-message region is
+                // materially faster than the full two-frame chat consensus.
+                _nextPurchaseResultOcrProbe = DateTimeOffset.UtcNow.AddMilliseconds(700);
+                observation = await _qq.ObservePurchaseResultAsync(cancellationToken);
+                purchaseOcrFastPath = true;
+            }
+            else if (_checkpoint.State == AutomationState.WaitingPurchaseResult &&
+                     _pendingListing is not null)
+            {
+                // Keep the coordinator responsive without repeatedly OCRing
+                // the same unchanged bottom-of-chat pixels.
+                return;
             }
             else
             {
@@ -306,6 +326,10 @@ public sealed class AutomationCoordinator : BackgroundService
                 {
                     var purchaseText = purchaseUiAFastPath
                         ? observation.RawText
+                        : purchaseOcrFastPath && _lastQuery is not null &&
+                          OcrResponseGate.TryExtractAfterCommand(observation, _lastQuery,
+                              out var fastPurchaseResponse)
+                            ? fastPurchaseResponse.RawText
                         : _lastQuery is not null &&
                           OcrResponseGate.TryExtractAfterCommand(observation, _lastQuery,
                               out var purchaseResponse)
@@ -550,6 +574,7 @@ public sealed class AutomationCoordinator : BackgroundService
         _checkpoint.Step = $"准备购买：{selected.HerbName} {selected.PriceWan:0.####}万 " +
                            $"（本页剩余 {_marketQueue.Count}）";
         _checkpoint.PendingActionId = selected.ListingToken;
+        _nextPurchaseResultOcrProbe = DateTimeOffset.MinValue;
         await DelayActionAsync(settings, ActionDelayKind.Purchase, cancellationToken);
         await _qq.SendPurchaseCommandAsync(selected, command, cancellationToken);
         _lastQuery = command;
@@ -722,6 +747,7 @@ public sealed class AutomationCoordinator : BackgroundService
         _queryRetried = false;
         _pendingListing = null;
         _lastQuery = null;
+        _nextPurchaseResultOcrProbe = DateTimeOffset.MinValue;
         _candidates.Clear();
         _marketQueue.Clear();
         _marketCommands.Clear();

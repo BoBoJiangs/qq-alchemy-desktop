@@ -127,6 +127,13 @@ public sealed class OcrAutomationTests
     }
 
     [Fact]
+    public void QqDesktopClient_NormalizesAccessiblePurchaseNamesBeforeMatching()
+    {
+        Assert.True(QqDesktopClient.HasPurchaseSuccessFor(
+            "道友成功购买三尾\u2060风叶\u200b，消耗灵石3700000枚", "三尾风叶"));
+    }
+
+    [Fact]
     public void QqDesktopClient_AccessibleChatMarkerRecognizesUsefulResponsesOnly()
     {
         Assert.True(QqDesktopClient.HasUsefulChatMarker("药材背包 第2页/共5页"));

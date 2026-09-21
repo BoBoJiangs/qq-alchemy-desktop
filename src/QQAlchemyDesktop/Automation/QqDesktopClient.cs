@@ -682,6 +682,25 @@ public sealed class QqDesktopClient
             allowLiveRefresh: true);
     }
 
+    /// <summary>
+    /// Reads only the recent bottom portion of the chat once.  Purchase
+    /// confirmations are appended there, so the coordinator can validate the
+    /// current command without waiting for a full-chat OCR consensus.
+    /// </summary>
+    public async Task<OcrObservation> ObservePurchaseResultAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var settings = await RequireVerifiedCalibrationAsync(cancellationToken);
+        var recentChat = ExpandChatRegion(settings.ChatRegion);
+        const double recentHeightRatio = 0.48;
+        var recentRegion = new NormalizedRect(
+            recentChat.X,
+            recentChat.Y + recentChat.Height * (1 - recentHeightRatio),
+            recentChat.Width,
+            recentChat.Height * recentHeightRatio);
+        return await RecognizeRegionAsync(recentRegion, cancellationToken);
+    }
+
     private static NormalizedRect ExpandChatRegion(NormalizedRect region)
     {
         const double leftPadding = 0.18;
