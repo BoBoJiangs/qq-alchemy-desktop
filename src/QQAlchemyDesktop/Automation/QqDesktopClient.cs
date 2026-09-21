@@ -80,6 +80,40 @@ public sealed class QqDesktopClient
     public IReadOnlyList<string> GetAccessibleTexts() => GetDiagnostics().AccessibleTexts;
 
     /// <summary>
+    /// Detect a captcha only when its UIA text node has a real on-screen
+    /// rectangle in the QQ chat viewport. QQ keeps solved captcha messages in
+    /// its accessibility tree, so text presence alone is not sufficient.
+    /// </summary>
+    public bool HasVisibleCaptcha()
+    {
+        if (!TryLocateWindow(out var process, out var hwnd) || process is null) return false;
+        try
+        {
+            using var app = FlaUI.Core.Application.Attach(process);
+            using var automation = new UIA3Automation();
+            var window = automation.FromHandle(hwnd);
+            if (window is null) return false;
+            var bounds = window.BoundingRectangle;
+            var chatViewport = Rectangle.FromLTRB(
+                bounds.Left + (int)(bounds.Width * 0.20),
+                bounds.Top + (int)(bounds.Height * 0.10),
+                bounds.Left + (int)(bounds.Width * 0.80),
+                bounds.Top + (int)(bounds.Height * 0.90));
+            return window.FindAllDescendants(cf => cf.ByControlType(ControlType.Text))
+                .Where(element => MessageClassifier.IsCaptcha(element.Name?.Trim() ?? ""))
+                .Select(element => element.BoundingRectangle)
+                .Any(rect => IsVisibleCaptchaBounds(rect, chatViewport));
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    internal static bool IsVisibleCaptchaBounds(Rectangle textBounds, Rectangle chatViewport) =>
+        textBounds.Width >= 20 && textBounds.Height >= 8 && chatViewport.IntersectsWith(textBounds);
+
+    /// <summary>
     /// 在 QQ 的全局搜索框中输入群号，但不选择结果、不打开群聊，也不发送任何消息。
     /// 这是校准向导使用的只读探测步骤（输入的群号来自用户明确提供的配置）。
     /// </summary>

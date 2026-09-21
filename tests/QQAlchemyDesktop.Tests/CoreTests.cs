@@ -72,14 +72,12 @@ public sealed class CoreTests : IDisposable
     }
 
     [Fact]
-    public void CaptchaGuard_IgnoresHistoricalCaptchaBeforeLatestCommand()
+    public void CaptchaGuard_RequiresVisibleTextBounds()
     {
-        Assert.False(AutomationCoordinator.HasCaptchaAfterLatestCommand([
-            "请点击图中第2个表情对应的按钮", "药材背包", "一心的药材背包"
-        ], "药材背包"));
-        Assert.True(AutomationCoordinator.HasCaptchaAfterLatestCommand([
-            "药材背包", "一心的药材背包", "请点击图中第2个表情对应的按钮"
-        ], "药材背包"));
+        var viewport = new Rectangle(100, 100, 500, 700);
+        Assert.True(QqDesktopClient.IsVisibleCaptchaBounds(new Rectangle(120, 400, 180, 24), viewport));
+        Assert.False(QqDesktopClient.IsVisibleCaptchaBounds(new Rectangle(120, 900, 180, 24), viewport));
+        Assert.False(QqDesktopClient.IsVisibleCaptchaBounds(new Rectangle(120, 400, 10, 6), viewport));
     }
 
     [Fact]
