@@ -187,7 +187,7 @@ public sealed class QqDesktopClient
                 node.Bounds.Width, node.Bounds.Height))
             .ToArray();
         var raw = string.Join('\n', card.Select(node => node.Text));
-        if (!IsCompleteInventoryObservation(raw, expectedPage, knownHerbNames)) return false;
+        if (!IsCompleteInventoryText(raw, expectedPage, knownHerbNames)) return false;
 
         var words = card.Select(node => new OcrWordData(node.Text,
             new PixelRect(node.Bounds.Left, node.Bounds.Top,
@@ -834,6 +834,20 @@ public sealed class QqDesktopClient
         // happened to recognize only a few rows from being accepted.
         var minimumEntries = current < total ? 18 : 15;
         return entries.Count >= minimumEntries;
+    }
+
+    internal static bool IsCompleteInventoryText(string rawText, int expectedPage,
+        IReadOnlyCollection<string> knownHerbNames)
+    {
+        if (!HasInventoryPageFor(rawText, expectedPage) || knownHerbNames.Count == 0)
+            return false;
+        var entries = InventoryParser.Parse(rawText, new HerbNameResolver(knownHerbNames));
+        var quantityCount = Regex.Matches(rawText,
+            @"(?:拥有数量|数量)\s*[:：]?\s*\d+").Count;
+        // A complete UIA card exposes one quantity line for every name link.
+        // Requiring equality avoids accepting a clipped/partial card while
+        // still supporting a shorter final page.
+        return quantityCount >= 10 && entries.Count == quantityCount;
     }
 
     /// <summary>

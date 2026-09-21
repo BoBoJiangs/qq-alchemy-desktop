@@ -243,11 +243,15 @@ public sealed class CoreTests : IDisposable
         var observation = new OcrObservation(raw, [], "frame", DateTimeOffset.Now);
 
         Assert.True(QqDesktopClient.IsCompleteInventoryObservation(observation, 1, names));
+        Assert.True(QqDesktopClient.IsCompleteInventoryText(raw, 1, names));
         Assert.False(QqDesktopClient.IsCompleteInventoryObservation(observation with
         {
             RawText = string.Join('\n', names.Take(17).Select(name =>
                 $"名字：{name} 拥有数量：1")) + "\n第1页/共5页"
         }, 1, names));
+        Assert.False(QqDesktopClient.IsCompleteInventoryText(
+            string.Join('\n', names.Take(17).Select(name => $"名字：{name} 拥有数量：1")) +
+            "\n名字：未知药材 拥有数量：1\n第1页/共5页", 1, names));
     }
 
     [Fact]
