@@ -612,8 +612,16 @@ public sealed class QqDesktopClient
     public async Task<OcrObservation> ObserveChatAsync(CancellationToken cancellationToken = default)
     {
         var settings = await RequireVerifiedCalibrationAsync(cancellationToken);
-        return await ObserveRegionTwiceAsync(settings.ChatRegion, cancellationToken,
+        return await ObserveRegionTwiceAsync(ExpandChatRegion(settings.ChatRegion), cancellationToken,
             allowLiveRefresh: true);
+    }
+
+    private static NormalizedRect ExpandChatRegion(NormalizedRect region)
+    {
+        const double leftPadding = 0.18;
+        var left = Math.Max(0, region.X - leftPadding);
+        return new NormalizedRect(left, region.Y,
+            Math.Min(1 - left, region.Width + (region.X - left)), region.Height);
     }
 
     /// <summary>
@@ -640,12 +648,7 @@ public sealed class QqDesktopClient
         // but the market card starts much farther left than the input box.
         // Capture an expanded market area and translate its OCR coordinates
         // back to the configured chat region before creating a listing.
-        var marketRegion = new NormalizedRect(
-            Math.Max(0, settings.ChatRegion.X - 0.18),
-            settings.ChatRegion.Y,
-            Math.Min(1 - Math.Max(0, settings.ChatRegion.X - 0.18),
-                settings.ChatRegion.Width + 0.18),
-            settings.ChatRegion.Height);
+        var marketRegion = ExpandChatRegion(settings.ChatRegion);
         using var wholeMarket = await CaptureWindowAsync(cancellationToken);
         var wholeBounds = new Rectangle(0, 0, wholeMarket.Width, wholeMarket.Height);
         var requestedMarket = marketRegion.ToPixels(wholeBounds);
