@@ -631,7 +631,11 @@ public sealed class AutomationCoordinator : BackgroundService
     internal static (int MinimumMilliseconds, int MaximumMilliseconds) GetActionDelayBounds(
         int randomDelaySeconds, ActionDelayKind kind)
     {
-        var baseline = kind == ActionDelayKind.Purchase ? 450 : 700;
+        // Keep a short but non-zero server-safe gap.  The previous fixed
+        // 2-5 second random wait made every page unnecessarily slow; a
+        // 1.2s query gap and 0.7s purchase gap retain pacing without making
+        // the bot look like a burst of back-to-back commands.
+        var baseline = kind == ActionDelayKind.Purchase ? 700 : 1200;
         var extra = Math.Clamp(randomDelaySeconds, 0, 30) * 1000;
         return (baseline, baseline + extra);
     }
