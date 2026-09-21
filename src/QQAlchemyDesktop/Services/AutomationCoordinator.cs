@@ -173,9 +173,9 @@ public sealed class AutomationCoordinator : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         await InitializeAsync(stoppingToken);
-        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(450));
-        while (await timer.WaitForNextTickAsync(stoppingToken))
+        while (!stoppingToken.IsCancellationRequested)
         {
+            await Task.Delay(GetPollingDelayMilliseconds(_checkpoint.State), stoppingToken);
             try { await TickAsync(stoppingToken); }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { }
             catch (Exception exception) { await PauseFromExceptionAsync(exception, stoppingToken); }
@@ -242,6 +242,17 @@ public sealed class AutomationCoordinator : BackgroundService
             {
                 observation = accessibleObservation;
             }
+            else if (_checkpoint.State == AutomationState.WaitingPurchaseResult &&
+                     _lastQuery is not null &&
+                     _qq.TryObserveVisibleChat(out var purchaseAccessibleObservation) &&
+                     OcrResponseGate.TryExtractAfterCommand(purchaseAccessibleObservation, _lastQuery, out _))
+            {
+                // A purchase response is exposed by QQ UIA before a stable
+                // OCR frame is available. Use it as the fast path, but only
+                // when the exact UUID command is visible so an older success
+                // message cannot be attributed to the current purchase.
+                observation = purchaseAccessibleObservation;
+            }
             else
             {
                 observation = await _qq.ObserveChatAsync(cancellationToken);
@@ -291,8 +302,12 @@ public sealed class AutomationCoordinator : BackgroundService
                 }
                 case AutomationState.WaitingPurchaseResult:
                 {
-                    OcrResponseGate.TryExtractLatest(observation, 10, out var purchaseResponse);
-                    await HandlePurchaseResultLockedAsync(OcrResponseGate.LatestText(purchaseResponse, 10), cancellationToken);
+                    var purchaseText = _lastQuery is not null &&
+                                       OcrResponseGate.TryExtractAfterCommand(observation, _lastQuery,
+                                           out var purchaseResponse)
+                        ? purchaseResponse.RawText
+                        : "";
+                    await HandlePurchaseResultLockedAsync(purchaseText, cancellationToken);
                     break;
                 }
                 case AutomationState.WaitingAlchemyResult:
@@ -533,7 +548,7 @@ public sealed class AutomationCoordinator : BackgroundService
         _checkpoint.PendingActionId = selected.ListingToken;
         await DelayActionAsync(settings, ActionDelayKind.Purchase, cancellationToken);
         await _qq.SendPurchaseCommandAsync(selected, command, cancellationToken);
-        _lastQuery = "坊市购买";
+        _lastQuery = command;
         _checkpoint.State = AutomationState.WaitingPurchaseResult;
         _checkpoint.Step = $"等待购买结果：{selected.HerbName} {selected.PriceWan:0.####}万 " +
                            $"（本页剩余 {_marketQueue.Count}）";
@@ -672,12 +687,18 @@ public sealed class AutomationCoordinator : BackgroundService
     {
         // Keep a short but non-zero server-safe gap.  The previous fixed
         // 2-5 second random wait made every page unnecessarily slow; a
-        // 1.2s query gap and 0.7s purchase gap retain pacing without making
-        // the bot look like a burst of back-to-back commands.
-        var baseline = kind == ActionDelayKind.Purchase ? 700 : 1200;
+        // 1.2s query gap and a 0.3s purchase gap retain a small pacing
+        // cushion. Purchase responses are read through UIA first, so the
+        // coordinator no longer waits for a full OCR pass before dispatching
+        // the next command or makes the bot look like a burst of back-to-back
+        // commands.
+        var baseline = kind == ActionDelayKind.Purchase ? 300 : 1200;
         var extra = Math.Clamp(randomDelaySeconds, 0, 30) * 1000;
         return (baseline, baseline + extra);
     }
+
+    internal static int GetPollingDelayMilliseconds(AutomationState state) =>
+        state == AutomationState.WaitingPurchaseResult ? 180 : 450;
 
     private static async Task DelayActionAsync(AlchemySettings settings, ActionDelayKind kind,
         CancellationToken cancellationToken)

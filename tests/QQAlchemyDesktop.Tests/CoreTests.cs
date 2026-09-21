@@ -187,10 +187,14 @@ public sealed class CoreTests : IDisposable
     [Fact]
     public void AutomationCoordinator_UsesShortBaselineAndHonorsOptionalRandomDelay()
     {
-        Assert.Equal((700, 700), AutomationCoordinator.GetActionDelayBounds(
+        Assert.Equal((300, 300), AutomationCoordinator.GetActionDelayBounds(
             0, AutomationCoordinator.ActionDelayKind.Purchase));
         Assert.Equal((1200, 3200), AutomationCoordinator.GetActionDelayBounds(
             2, AutomationCoordinator.ActionDelayKind.Query));
+        Assert.Equal(180, AutomationCoordinator.GetPollingDelayMilliseconds(
+            AutomationState.WaitingPurchaseResult));
+        Assert.Equal(450, AutomationCoordinator.GetPollingDelayMilliseconds(
+            AutomationState.ScanningMarket));
     }
 
     [Theory]

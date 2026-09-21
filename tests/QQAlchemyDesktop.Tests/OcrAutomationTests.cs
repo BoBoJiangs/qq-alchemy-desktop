@@ -102,6 +102,23 @@ public sealed class OcrAutomationTests
     }
 
     [Fact]
+    public void PurchaseResponseGate_IgnoresOlderSuccessBeforeCurrentUuid()
+    {
+        const string command = "坊市购买22906fc8-99c2-4356-a466-4c17e3d8dcb5";
+        var observation = new OcrObservation(
+            "旧消息\n道友成功购买旧药材\n坊市购买22906fc8-99c2-4356-a466-4c17e3d8dcb5\n道友成功购买九叶芝",
+            [
+                new OcrWordData("道友成功购买旧药材", new PixelRect(10, 20, 180, 20)),
+                new OcrWordData(command, new PixelRect(10, 60, 360, 20)),
+                new OcrWordData("道友成功购买九叶芝", new PixelRect(10, 100, 180, 20))
+            ], "FRAME", DateTimeOffset.Now);
+
+        Assert.True(OcrResponseGate.TryExtractAfterCommand(observation, command, out var response));
+        Assert.Contains("道友成功购买九叶芝", response.RawText);
+        Assert.DoesNotContain("旧药材", response.RawText);
+    }
+
+    [Fact]
     public void OcrConsensus_NormalizesPresentationNoiseButRejectsDifferentContent()
     {
         Assert.True(OcrConsensus.AreEquivalent("药材背包： 1 页", "药材背包:1页"));
@@ -113,6 +130,7 @@ public sealed class OcrAutomationTests
     public void QqDesktopClient_AccessibleChatMarkerRecognizesUsefulResponsesOnly()
     {
         Assert.True(QqDesktopClient.HasUsefulChatMarker("药材背包 第2页/共5页"));
+        Assert.True(QqDesktopClient.HasUsefulChatMarker("坊市购买22906fc8-99c2-4356-a466-4c17e3d8dcb5"));
         Assert.True(QqDesktopClient.HasUsefulChatMarker("未查询到该物品"));
         Assert.False(QqDesktopClient.HasUsefulChatMarker("普通聊天消息"));
         Assert.True(QqDesktopClient.HasInventoryPayload("药材背包 名字：九叶芝 拥有数量：2"));

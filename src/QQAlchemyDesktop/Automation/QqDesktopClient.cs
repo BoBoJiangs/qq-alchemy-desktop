@@ -22,6 +22,14 @@ public sealed class QqDesktopClient
     private readonly AppPaths _paths;
     private readonly SemaphoreSlim _inputGate = new(1, 1);
 
+    // A clicked market link normally fills the QQ edit control almost
+    // immediately.  Poll the control briefly before falling back to one OCR
+    // read; the old fixed 450ms + two-frame OCR path made every listing wait
+    // several seconds even when UIA already exposed the UUID.
+    private const int PurchaseCodePostClickDelayMilliseconds = 220;
+    private const int PurchaseCodePollMilliseconds = 70;
+    private const int PurchaseCodePollTimeoutMilliseconds = 800;
+
     public QqDesktopClient(RapidOcrService ocr, WindowsGraphicsCaptureService capture, SqliteStore store, AppPaths paths)
     {
         _ocr = ocr;
@@ -144,6 +152,7 @@ public sealed class QqDesktopClient
     internal static bool HasUsefulChatMarker(string text) =>
         text.Contains("药材背包", StringComparison.Ordinal) ||
         text.Contains("坊市数据", StringComparison.Ordinal) ||
+        text.Contains("坊市购买", StringComparison.Ordinal) ||
         text.Contains("价格", StringComparison.Ordinal) ||
         text.Contains("成功购买", StringComparison.Ordinal) ||
         text.Contains("未查询", StringComparison.Ordinal) ||
@@ -1043,52 +1052,33 @@ public sealed class QqDesktopClient
                 invoked = false;
             }
             if (!invoked) Click(point.X, point.Y);
-            await Task.Delay(450, cancellationToken);
+            await Task.Delay(PurchaseCodePostClickDelayMilliseconds, cancellationToken);
 
-            var preparedText = TryReadInputText(process, settings);
-            if (!PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName,
-                    requireBotMention: false, out var command))
+            string preparedText = "";
+            string? command = await WaitForPurchaseCommandAsync(process, settings, cancellationToken);
+            if (command is null)
             {
-                try
-                {
-                    var inputObservation = await ObserveRegionTwiceAsync(
-                        ExpandChatRegion(settings.InputRegion), cancellationToken,
-                        allowLiveRefresh: true);
-                    preparedText = inputObservation.RawText;
-                }
-                catch (OcrConflictException)
-                {
-                    preparedText = "";
-                }
+                preparedText = await RecognizeInputOnceAsync(settings, cancellationToken);
+                if (PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName,
+                        requireBotMention: false, out var ocrCommand)) command = ocrCommand;
             }
-            if (!PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName,
-                    requireBotMention: false, out command))
+            if (command is null)
             {
                 // QQNT may expose the link as Invoke-capable while doing
                 // nothing when Invoke is called.  Retry with a real click,
                 // then validate the generated command again before sending.
                 ClearInput(input);
                 Click(point.X, point.Y);
-                await Task.Delay(450, cancellationToken);
-                preparedText = TryReadInputText(process, settings);
-                if (!PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName,
-                        requireBotMention: false, out command))
+                await Task.Delay(PurchaseCodePostClickDelayMilliseconds, cancellationToken);
+                command = await WaitForPurchaseCommandAsync(process, settings, cancellationToken);
+                if (command is null)
                 {
-                    try
-                    {
-                        var retryObservation = await ObserveRegionTwiceAsync(
-                            ExpandChatRegion(settings.InputRegion), cancellationToken,
-                            allowLiveRefresh: true);
-                        preparedText = retryObservation.RawText;
-                    }
-                    catch (OcrConflictException)
-                    {
-                        preparedText = "";
-                    }
+                    preparedText = await RecognizeInputOnceAsync(settings, cancellationToken);
+                    if (PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName,
+                            requireBotMention: false, out var retryCommand)) command = retryCommand;
                 }
             }
-            if (!PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName,
-                    requireBotMention: false, out command))
+            if (command is null)
             {
                 // On some QQNT cards the visible item name is a decorative
                 // hyperlink and the actionable purchase link is the
@@ -1100,26 +1090,16 @@ public sealed class QqDesktopClient
                     $"{listing.HerbName} screen={effectPoint.X},{effectPoint.Y}",
                     listing.ListingToken, cancellationToken);
                 Click(effectPoint.X, effectPoint.Y);
-                await Task.Delay(450, cancellationToken);
-                preparedText = TryReadInputText(process, settings);
-                if (!PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName,
-                        requireBotMention: false, out command))
+                await Task.Delay(PurchaseCodePostClickDelayMilliseconds, cancellationToken);
+                command = await WaitForPurchaseCommandAsync(process, settings, cancellationToken);
+                if (command is null)
                 {
-                    try
-                    {
-                        var effectObservation = await ObserveRegionTwiceAsync(
-                            ExpandChatRegion(settings.InputRegion), cancellationToken,
-                            allowLiveRefresh: true);
-                        preparedText = effectObservation.RawText;
-                    }
-                    catch (OcrConflictException)
-                    {
-                        preparedText = "";
-                    }
+                    preparedText = await RecognizeInputOnceAsync(settings, cancellationToken);
+                    if (PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName,
+                            requireBotMention: false, out var effectCommand)) command = effectCommand;
                 }
             }
-            if (!PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName,
-                    requireBotMention: false, out command))
+            if (command is null)
             {
                 ClearInput(input);
                 await _store.AuditAsync("warn", "market_click_input_invalid",
@@ -1137,6 +1117,30 @@ public sealed class QqDesktopClient
         {
             _inputGate.Release();
         }
+    }
+
+    private static async Task<string?> WaitForPurchaseCommandAsync(Process process,
+        CalibrationSettings settings, CancellationToken cancellationToken)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddMilliseconds(PurchaseCodePollTimeoutMilliseconds);
+        while (true)
+        {
+            var text = TryReadInputText(process, settings);
+            if (PurchaseCommandValidator.TryValidate(text, settings.GameBotDisplayName,
+                    requireBotMention: false, out var command)) return command;
+            var remaining = deadline - DateTimeOffset.UtcNow;
+            if (remaining <= TimeSpan.Zero) return null;
+            await Task.Delay(Math.Min(PurchaseCodePollMilliseconds, (int)remaining.TotalMilliseconds),
+                cancellationToken);
+        }
+    }
+
+    private async Task<string> RecognizeInputOnceAsync(CalibrationSettings settings,
+        CancellationToken cancellationToken)
+    {
+        using var bitmap = await CaptureRegionAsync(ExpandChatRegion(settings.InputRegion), cancellationToken);
+        var observation = await _ocr.RecognizeAsync(bitmap, cancellationToken);
+        return observation.RawText;
     }
 
     private static string TryReadInputText(Process process, CalibrationSettings settings)
