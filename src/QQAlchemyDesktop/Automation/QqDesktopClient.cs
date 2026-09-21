@@ -924,7 +924,18 @@ public sealed class QqDesktopClient
                     $"{listing.HerbName} {elementInfo}", listing.ListingToken, cancellationToken);
                 if (element is not null && element.Patterns.Invoke.IsSupported)
                 {
-                    element.Patterns.Invoke.Pattern.Invoke();
+                    if (element.TryGetClickablePoint(out var clickable) &&
+                        windowBounds.Contains(clickable))
+                    {
+                        await _store.AuditAsync("info", "market_click_clickable_point",
+                            $"{listing.HerbName} screen={clickable.X},{clickable.Y}",
+                            listing.ListingToken, cancellationToken);
+                        Click(clickable.X, clickable.Y);
+                    }
+                    else
+                    {
+                        element.Patterns.Invoke.Pattern.Invoke();
+                    }
                     invoked = true;
                 }
             }
