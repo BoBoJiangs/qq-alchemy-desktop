@@ -56,12 +56,27 @@ public static partial class InventoryParser
     [GeneratedRegex(@"(?:拥有数量|数量)\s*[:：]?\s*(?<count>\d+)", RegexOptions.Compiled)]
     private static partial Regex CountPattern();
 
+    [GeneratedRegex(@"名字\s*[:：]?\s*[【\[]?(?<name>[\u4e00-\u9fff0-9]{2,})[】\]]?(?:\([^)]*\))?.*?(?:拥有数量|数量)\s*[:：]?\s*(?<count>\d+)", RegexOptions.Compiled)]
+    private static partial Regex NamedCountPattern();
+
     public static IReadOnlyList<InventoryEntry> Parse(string text, HerbNameResolver names)
     {
         var result = new Dictionary<string, int>(StringComparer.Ordinal);
         string? pendingName = null;
         foreach (var rawLine in Normalize(text).Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
+            var namedCounts = NamedCountPattern().Matches(rawLine);
+            if (namedCounts.Count > 0)
+            {
+                foreach (Match namedCount in namedCounts)
+                {
+                    var resolved = names.Resolve(namedCount.Groups["name"].Value);
+                    if (resolved is not null && int.TryParse(namedCount.Groups["count"].Value, out var pairCount))
+                        result[resolved] = pairCount;
+                }
+                pendingName = null;
+                continue;
+            }
             var explicitName = NamePattern().Match(rawLine);
             if (explicitName.Success) pendingName = names.Resolve(explicitName.Groups["name"].Value);
             var inline = InlinePattern().Match(rawLine);
