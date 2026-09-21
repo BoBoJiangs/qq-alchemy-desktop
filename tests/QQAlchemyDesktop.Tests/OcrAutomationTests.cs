@@ -90,6 +90,8 @@ public sealed class OcrAutomationTests
         Assert.True(QqDesktopClient.HasUsefulChatMarker("药材背包 第2页/共5页"));
         Assert.True(QqDesktopClient.HasUsefulChatMarker("未查询到该物品"));
         Assert.False(QqDesktopClient.HasUsefulChatMarker("普通聊天消息"));
+        Assert.True(QqDesktopClient.HasInventoryPayload("药材背包 名字：九叶芝 拥有数量：2"));
+        Assert.False(QqDesktopClient.HasInventoryPayload("药材背包"));
     }
 
     [Fact]

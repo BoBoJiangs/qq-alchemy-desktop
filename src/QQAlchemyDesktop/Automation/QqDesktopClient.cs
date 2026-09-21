@@ -150,6 +150,11 @@ public sealed class QqDesktopClient
         text.Contains("坊市现在", StringComparison.Ordinal) ||
         text.Contains("上一条指令", StringComparison.Ordinal);
 
+    internal static bool HasInventoryPayload(string text) =>
+        MessageClassifier.IsInventoryPage(text) &&
+        (text.Contains("拥有数量", StringComparison.Ordinal) ||
+         text.Contains("数量", StringComparison.Ordinal));
+
     /// <summary>
     /// Detect a captcha only when its UIA text node has a real on-screen
     /// rectangle in the QQ chat viewport. QQ keeps solved captcha messages in

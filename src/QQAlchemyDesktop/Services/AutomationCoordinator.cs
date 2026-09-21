@@ -236,7 +236,8 @@ public sealed class AutomationCoordinator : BackgroundService
                     purchaseRules.Select(rule => rule.HerbName), cancellationToken);
             }
             else if (_checkpoint.State == AutomationState.ReadingInventory &&
-                     _qq.TryObserveVisibleChat(out var accessibleObservation))
+                     _qq.TryObserveVisibleChat(out var accessibleObservation) &&
+                     QqDesktopClient.HasInventoryPayload(accessibleObservation.RawText))
             {
                 observation = accessibleObservation;
             }
