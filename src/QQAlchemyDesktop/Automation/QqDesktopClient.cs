@@ -663,10 +663,16 @@ public sealed class QqDesktopClient
         {
             // The fallback is deliberately non-fatal.  A later OCR pass may
             // still recognize a normal black-text market card.
+            await RecordOcrAuditAsync("warn", "market_text_enrich_empty",
+                $"regions={regions.Count}; baseResolved={baseResolved.Length}; resolved=0; " +
+                $"ocr={OcrConsensus.Compact(baseObservation.RawText)}");
             return baseObservation;
         }
 
         var accessiblePrices = ParseAccessibleMarketPrices(GetAccessibleTexts());
+        await RecordOcrAuditAsync("info", "market_text_enrich",
+            $"regions={regions.Count}; baseResolved={baseResolved.Length}; resolved={resolved.Count}; " +
+            $"rowPrices={resolved.Count(x => x.Price is not null)}; uiaPrices={accessiblePrices.Count}");
         var words = new List<OcrWordData>();
         foreach (var item in resolved.Select((value, index) => (value, index)))
         {
