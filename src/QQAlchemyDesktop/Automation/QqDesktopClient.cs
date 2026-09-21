@@ -1297,11 +1297,21 @@ public sealed class QqDesktopClient
 
     private static IReadOnlyList<AutomationElement> DistinctMentionCandidates(IEnumerable<MentionCandidate> source)
     {
-        return source
+        var items = source.ToArray();
+        // QQ exposes both the popup row and its nested text/icon nodes. Keep
+        // the smallest clickable element inside a larger duplicate container,
+        // while preserving separate rows with the same display name.
+        var leaves = items.Where(item => !items.Any(other =>
+            !ReferenceEquals(item, other) &&
+            IsNestedMentionRectangle(other.Rectangle, item.Rectangle))).ToArray();
+        return leaves
             .GroupBy(item => $"{item.Rectangle.Left:0.##},{item.Rectangle.Top:0.##},{item.Rectangle.Width:0.##},{item.Rectangle.Height:0.##}")
             .Select(group => group.First().Element)
             .ToArray();
     }
+
+    internal static bool IsNestedMentionRectangle(Rectangle outer, Rectangle inner) =>
+        outer.Width * outer.Height > inner.Width * inner.Height * 1.15d && outer.Contains(inner);
 
     private static void ClickElementCenter(AutomationElement element)
     {

@@ -81,6 +81,15 @@ public sealed class CoreTests : IDisposable
     }
 
     [Fact]
+    public void MentionDeduplication_RecognizesNestedPopupText()
+    {
+        Assert.True(QqDesktopClient.IsNestedMentionRectangle(
+            new Rectangle(20, 890, 260, 42), new Rectangle(80, 900, 36, 20)));
+        Assert.False(QqDesktopClient.IsNestedMentionRectangle(
+            new Rectangle(20, 890, 260, 42), new Rectangle(320, 900, 36, 20)));
+    }
+
+    [Fact]
     public void MarketParser_ConvertsYiToWanAndKeepsClickRect()
     {
         var observation = new OcrObservation("玄冰花 价格 1.2 亿", [
