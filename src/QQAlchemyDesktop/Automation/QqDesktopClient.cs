@@ -343,6 +343,8 @@ public sealed class QqDesktopClient
                 // 整屏回复卡片会把命令行顶出可视区：响应判定直接用完整区域原文
                 //（PP-OCR 已按行压缩空白，卡片内的名字/数量/页码都在其中）。
                 var page = ParsePageState(observation.RawText);
+                var inventoryPage = MessageClassifier.IsInventoryPage(observation.RawText);
+                IReadOnlyList<string> accessibleTexts = Array.Empty<string>();
                 if (page is null)
                 {
                     // QQNT exposes the rendered card text through UIA even
@@ -351,9 +353,10 @@ public sealed class QqDesktopClient
                     // healthy response does not fail calibration solely on a
                     // missed "第N页/共M页" glyph.
                     var diagnostics = GetDiagnostics();
-                    page = ParsePageStateFromAccessibleTexts(diagnostics.AccessibleTexts);
-                    if (page is not null && diagnostics.AccessibleTexts.Any(text =>
-                            text.Contains("药材背包", StringComparison.Ordinal)))
+                    accessibleTexts = diagnostics.AccessibleTexts;
+                    page = ParsePageStateFromAccessibleTexts(accessibleTexts);
+                    inventoryPage = HasAccessibleInventoryResponse(accessibleTexts);
+                    if (page is not null && inventoryPage)
                     {
                         await _store.AuditAsync("info", "verify_page_uia_fallback",
                             $"OCR 未识别页脚，改用 UIA 读取第{page.Value.Current}页/共{page.Value.Total}页",
@@ -363,6 +366,13 @@ public sealed class QqDesktopClient
                     {
                         page = null;
                     }
+                }
+                else if (!inventoryPage)
+                {
+                    // OCR may recover the page footer but miss the blue
+                    // response heading; consult UIA before discarding it.
+                    accessibleTexts = GetDiagnostics().AccessibleTexts;
+                    inventoryPage = HasAccessibleInventoryResponse(accessibleTexts);
                 }
                 if (page is null)
                 {
@@ -376,7 +386,7 @@ public sealed class QqDesktopClient
                     catch { /* 审计失败不影响主流程 */ }
                     continue;
                 }
-                if (!MessageClassifier.IsInventoryPage(observation.RawText)) continue;
+                if (!inventoryPage) continue;
                 if (page.Value.Current != expectedPage) continue;
                 if (expectedPage >= page.Value.Total || expectedPage >= 20)
                 {
@@ -1279,6 +1289,9 @@ public sealed class QqDesktopClient
         }
         return null;
     }
+
+    internal static bool HasAccessibleInventoryResponse(IReadOnlyList<string> accessibleTexts) =>
+        accessibleTexts.Any(text => text.Contains("药材背包", StringComparison.Ordinal));
 
     private static void RestoreAndActivate(IntPtr hwnd)
     {

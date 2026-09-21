@@ -115,6 +115,8 @@ public sealed class CoreTests : IDisposable
         ]);
         Assert.Equal((2, 5), page);
         Assert.Null(QqDesktopClient.ParsePageStateFromAccessibleTexts(["没有页脚"]));
+        Assert.True(QqDesktopClient.HasAccessibleInventoryResponse(["一心的药材背包", "第2页/共5页"]));
+        Assert.False(QqDesktopClient.HasAccessibleInventoryResponse(["坊市数据", "第2页/共5页"]));
     }
 
     [Fact]
