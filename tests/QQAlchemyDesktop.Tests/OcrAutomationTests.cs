@@ -85,6 +85,20 @@ public sealed class OcrAutomationTests
     }
 
     [Fact]
+    public void QqDesktopClient_AccessibleChatMarkerRecognizesUsefulResponsesOnly()
+    {
+        Assert.True(QqDesktopClient.HasUsefulChatMarker("药材背包 第2页/共5页"));
+        Assert.True(QqDesktopClient.HasUsefulChatMarker("未查询到该物品"));
+        Assert.False(QqDesktopClient.HasUsefulChatMarker("普通聊天消息"));
+    }
+
+    [Fact]
+    public void HerbNameResolver_StripsUiZeroWidthDecorations()
+    {
+        Assert.Equal("七彩月兰", new HerbNameResolver(["七彩月兰"]).Resolve("七彩月兰\u200b"));
+    }
+
+    [Fact]
     public async Task RapidOcrV5_RecognizesChineseMarketLineAndCoordinates()
     {
         using var bitmap = new Bitmap(620, 120);

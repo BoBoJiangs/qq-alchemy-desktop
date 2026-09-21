@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Drawing.Imaging;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Runtime.Versioning;
 using FlaUI.Core.AutomationElements;
@@ -114,6 +116,39 @@ public sealed class QqDesktopClient
             return Array.Empty<(string Text, Rectangle Bounds)>();
         }
     }
+
+    /// <summary>
+    /// Reads a useful, currently visible chat snapshot from UIA.  This is
+    /// intentionally a fast path for inventory page detection; callers still
+    /// fall back to OCR when QQ has not exposed enough text nodes yet.
+    /// </summary>
+    public bool TryObserveVisibleChat(out OcrObservation observation)
+    {
+        observation = default!;
+        var visible = GetVisibleAccessibleTexts();
+        if (visible.Count == 0) return false;
+        var raw = string.Join('\n', visible.Select(item => item.Text));
+        if (!HasUsefulChatMarker(raw)) return false;
+
+        var words = visible.Select(item => new OcrWordData(item.Text,
+            new PixelRect(item.Bounds.Left, item.Bounds.Top,
+                Math.Max(1, item.Bounds.Width), Math.Max(1, item.Bounds.Height)), 0.99d))
+            .ToArray();
+        var signature = string.Join('|', visible.Select(item =>
+            $"{item.Text}:{item.Bounds.Left},{item.Bounds.Top},{item.Bounds.Width},{item.Bounds.Height}"));
+        var frameHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(signature)));
+        observation = new OcrObservation(raw, words, frameHash, DateTimeOffset.Now);
+        return true;
+    }
+
+    internal static bool HasUsefulChatMarker(string text) =>
+        text.Contains("药材背包", StringComparison.Ordinal) ||
+        text.Contains("坊市数据", StringComparison.Ordinal) ||
+        text.Contains("价格", StringComparison.Ordinal) ||
+        text.Contains("成功购买", StringComparison.Ordinal) ||
+        text.Contains("未查询", StringComparison.Ordinal) ||
+        text.Contains("坊市现在", StringComparison.Ordinal) ||
+        text.Contains("上一条指令", StringComparison.Ordinal);
 
     /// <summary>
     /// Detect a captcha only when its UIA text node has a real on-screen
@@ -887,9 +922,6 @@ public sealed class QqDesktopClient
             var requireBotMention = !behavior.AllowUnmentionedCommands;
             if (!await VerifyGroupOnlyAsync(settings, cancellationToken))
                 throw new InvalidOperationException("当前 QQ 群标题不匹配，拒绝点击");
-            var fresh = await ObserveRegionTwiceAsync(settings.ChatRegion, cancellationToken);
-            if (!string.Equals(fresh.FrameHash, listing.FrameHash, StringComparison.Ordinal))
-                throw new InvalidOperationException("坊市页面已经变化，已取消购买点击");
             if (!TryLocateWindow(out var process, out var hwnd) || process is null)
                 throw new InvalidOperationException("QQ 窗口已丢失");
             RestoreAndActivate(hwnd);
@@ -899,6 +931,38 @@ public sealed class QqDesktopClient
             var input = settings.InputRegion.ToPixels(windowBounds);
             var point = new Point(chat.Left + listing.ClickRect.Center.X,
                 chat.Top + listing.ClickRect.Center.Y + Math.Max(2, listing.ClickRect.Height / 3));
+
+            var locatedByUia = TryFindVisibleMarketHyperlinkPoint(process, settings,
+                windowBounds, listing.HerbName, out var uiaPoint);
+            if (locatedByUia)
+            {
+                point = uiaPoint;
+                await _store.AuditAsync("info", "market_click_target_uia",
+                    $"{listing.HerbName} screen={point.X},{point.Y}",
+                    listing.ListingToken, cancellationToken);
+            }
+            else
+            {
+                var fresh = await ObserveRegionTwiceAsync(settings.ChatRegion, cancellationToken);
+                if (!string.Equals(fresh.FrameHash, listing.FrameHash, StringComparison.Ordinal))
+                {
+                    // A purchase response can scroll the same market card
+                    // without issuing a new market query.  Re-resolve only
+                    // this herb instead of rejecting the whole page queue.
+                    var refreshed = await ObserveMarketAsync([listing.HerbName], cancellationToken);
+                    var current = MarketParser.Parse(refreshed, listing.Page,
+                            new HerbNameResolver([listing.HerbName]))
+                        .FirstOrDefault(item => item.HerbName == listing.HerbName);
+                    if (current is null)
+                        throw new InvalidOperationException($"坊市页面已变化，未能重新定位 {listing.HerbName}");
+                    listing = current;
+                    point = new Point(chat.Left + listing.ClickRect.Center.X,
+                        chat.Top + listing.ClickRect.Center.Y + Math.Max(2, listing.ClickRect.Height / 3));
+                    await _store.AuditAsync("info", "market_click_relocated",
+                        $"{listing.HerbName} screen={point.X},{point.Y}",
+                        listing.ListingToken, cancellationToken);
+                }
+            }
 
             await _store.AuditAsync("info", "market_click_attempt",
                 $"{listing.HerbName} rect={listing.ClickRect} screen={point.X},{point.Y} " +
@@ -1077,6 +1141,46 @@ public sealed class QqDesktopClient
         Thread.Sleep(80);
         KeyChord(NativeMethods.VkControl, NativeMethods.VkA);
         KeyPress(NativeMethods.VkBack);
+    }
+
+    private static bool TryFindVisibleMarketHyperlinkPoint(Process process,
+        CalibrationSettings settings, Rectangle windowBounds, string herbName, out Point point)
+    {
+        point = default;
+        try
+        {
+            using var app = FlaUI.Core.Application.Attach(process);
+            using var automation = new UIA3Automation();
+            var window = app.GetMainWindow(automation, TimeSpan.FromSeconds(2));
+            if (window is null) return false;
+            var marketBounds = ExpandChatRegion(settings.ChatRegion).ToPixels(windowBounds);
+            var resolver = new HerbNameResolver([herbName]);
+            var candidates = window.FindAllDescendants(cf => cf.ByControlType(ControlType.Hyperlink))
+                .Select(element => new { Element = element, Name = element.Name?.Trim() ?? "", Rectangle = element.BoundingRectangle })
+                .Where(item => item.Rectangle.Width >= 8 && item.Rectangle.Height >= 8 &&
+                               marketBounds.IntersectsWith(item.Rectangle) &&
+                               resolver.Resolve(item.Name) == herbName)
+                .OrderBy(item => item.Rectangle.Top)
+                .ThenBy(item => item.Rectangle.Left)
+                .ToArray();
+            if (candidates.Length != 1) return false;
+            var rectangle = candidates[0].Rectangle;
+            if (candidates[0].Element.TryGetClickablePoint(out var clickable) &&
+                windowBounds.Contains(clickable))
+            {
+                point = clickable;
+            }
+            else
+            {
+                point = new Point((int)Math.Round((double)(rectangle.Left + rectangle.Width / 2)),
+                    (int)Math.Round((double)(rectangle.Top + rectangle.Height / 2)));
+            }
+            return windowBounds.Contains(point);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static void ScrollChatToBottom(NormalizedRect chatRegion, Rectangle windowBounds)

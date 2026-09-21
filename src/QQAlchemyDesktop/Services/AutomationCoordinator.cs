@@ -235,6 +235,11 @@ public sealed class AutomationCoordinator : BackgroundService
                 observation = await _qq.ObserveMarketAsync(
                     purchaseRules.Select(rule => rule.HerbName), cancellationToken);
             }
+            else if (_checkpoint.State == AutomationState.ReadingInventory &&
+                     _qq.TryObserveVisibleChat(out var accessibleObservation))
+            {
+                observation = accessibleObservation;
+            }
             else
             {
                 observation = await _qq.ObserveChatAsync(cancellationToken);
