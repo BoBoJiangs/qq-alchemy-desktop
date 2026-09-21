@@ -9,7 +9,9 @@ namespace QQAlchemyDesktop.Automation;
 
 public sealed class RapidOcrService
 {
-    private const int ScaleFactor = 2;
+    // QQ 卡片中的药材名通常只有 13–15px 高；3x 放大能让检测器
+    // 保留蓝色小字笔画，同时仍由 BlueLinkLocator 修正点击框。
+    private const int ScaleFactor = 3;
     private readonly OcrLite _engine;
     private readonly Task _initialization;
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -43,8 +45,8 @@ public sealed class RapidOcrService
             using var boosted = BoostColoredText(bitmap);
             using var scaled = Scale(boosted, ScaleFactor);
             var result = await _engine.DetectAsync(scaled, padding: 0,
-                maxSideLen: Math.Max(scaled.Width, scaled.Height), boxScoreThresh: 0.55f,
-                boxThresh: 0.3f, unClipRatio: 1.6f, doAngle: false, mostAngle: false);
+                maxSideLen: Math.Max(scaled.Width, scaled.Height), boxScoreThresh: 0.38f,
+                boxThresh: 0.22f, unClipRatio: 1.6f, doAngle: false, mostAngle: false);
             try
             {
                 var words = result.TextBlocks
