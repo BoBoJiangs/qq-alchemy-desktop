@@ -251,9 +251,32 @@ public sealed class QqDesktopClient
                 if (!NativeMethods.GetWindowRect(candidate, out var rect)) return true;
                 var width = Math.Max(0, rect.Right - rect.Left);
                 var height = Math.Max(0, rect.Bottom - rect.Top);
-                if (width > 0 && height > 0) candidates.Add((candidateProcess, candidate, (long)width * height));
+                // QQNT exposes several tiny helper/title-bar windows. They are
+                // visible, but cannot host the chat UI and used to win the
+                // area comparison when the real window was transitioning.
+                // Keep only plausible top-level chat windows first; a small
+                // fallback below still allows diagnostics to report a window
+                // when QQ is minimized or in a transient state.
+                if (IsUsableWindowBounds(width, height) && !NativeMethods.IsIconic(candidate))
+                    candidates.Add((candidateProcess, candidate, (long)width * height));
                 return true;
             }, IntPtr.Zero);
+        }
+
+        if (candidates.Count == 0)
+        {
+            foreach (var candidateProcess in Process.GetProcesses()
+                         .Where(p => p.ProcessName.Equals("QQ", StringComparison.OrdinalIgnoreCase) ||
+                                     p.ProcessName.Equals("QQNT", StringComparison.OrdinalIgnoreCase)))
+            {
+                var handle = candidateProcess.MainWindowHandle;
+                if (handle == IntPtr.Zero || !NativeMethods.IsWindowVisible(handle) ||
+                    !NativeMethods.GetWindowRect(handle, out var rect)) continue;
+                var width = Math.Max(0, rect.Right - rect.Left);
+                var height = Math.Max(0, rect.Bottom - rect.Top);
+                if (width > 0 && height > 0)
+                    candidates.Add((candidateProcess, handle, (long)width * height));
+            }
         }
 
         var selected = candidates.OrderByDescending(item => item.Area).FirstOrDefault();
@@ -261,6 +284,8 @@ public sealed class QqDesktopClient
         hwnd = selected.Handle;
         return process is not null && hwnd != IntPtr.Zero;
     }
+
+    internal static bool IsUsableWindowBounds(int width, int height) => width >= 400 && height >= 300;
 
     public async Task<CalibrationSettings> ProbeCalibrationAsync(CalibrationRequest request, CancellationToken cancellationToken = default)
     {
@@ -888,7 +913,7 @@ public sealed class QqDesktopClient
             var window = automation.FromHandle(hwnd);
             if (window is null) return;
             // 群标题只认聊天面板头部标题带（排除左侧会话列表和聊天消息里的同名文本）。
-            Rectangle? title = window.FindAllDescendants(cf => cf.ByControlType(ControlType.Text))
+            var discoveredTitle = window.FindAllDescendants(cf => cf.ByControlType(ControlType.Text))
                 .Where(x => string.Equals(x.Name?.Trim(), settings.GroupName, StringComparison.Ordinal))
                 .Select(x => x.BoundingRectangle)
                 .Where(r => r.Top <= windowBounds.Top + windowBounds.Height * 0.12 &&
@@ -897,6 +922,7 @@ public sealed class QqDesktopClient
                 .OrderBy(r => r.Top)
                 .Select(r => Rectangle.FromLTRB((int)r.Left, (int)r.Top, (int)r.Right, (int)r.Bottom))
                 .FirstOrDefault();
+            Rectangle? title = discoveredTitle.IsEmpty ? null : discoveredTitle;
             var input = window.FindAllDescendants(cf => cf.ByControlType(ControlType.Edit))
                 .Where(x => x.BoundingRectangle.Width >= windowBounds.Width * 0.35 &&
                             x.BoundingRectangle.Top >= windowBounds.Top + windowBounds.Height * 0.55)

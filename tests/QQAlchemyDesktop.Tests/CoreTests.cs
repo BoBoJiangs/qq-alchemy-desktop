@@ -1,6 +1,7 @@
 using QQAlchemyDesktop.Domain;
 using QQAlchemyDesktop.Infrastructure;
 using QQAlchemyDesktop.Services;
+using QQAlchemyDesktop.Automation;
 
 namespace QQAlchemyDesktop.Tests;
 
@@ -95,6 +96,14 @@ public sealed class CoreTests : IDisposable
         Assert.False(PurchaseSelector.HasReachedTaskLimit(49, 50));
         Assert.True(PurchaseSelector.HasReachedTaskLimit(50, 50));
     }
+
+    [Theory]
+    [InlineData(960, 764, true)]
+    [InlineData(399, 764, false)]
+    [InlineData(960, 299, false)]
+    [InlineData(160, 28, false)]
+    public void QqWindowLocator_RejectsTinyHelperWindows(int width, int height, bool expected) =>
+        Assert.Equal(expected, QqDesktopClient.IsUsableWindowBounds(width, height));
 
     [Fact]
     public async Task RecipeRules_KeepThresholdPingLeadProfitOrderAndCommandFormat()
