@@ -80,6 +80,42 @@ public sealed class QqDesktopClient
     public IReadOnlyList<string> GetAccessibleTexts() => GetDiagnostics().AccessibleTexts;
 
     /// <summary>
+    /// Returns only text nodes that are currently visible inside the chat
+    /// viewport.  QQ keeps old card nodes in UIA even after they scroll away,
+    /// so callers must not use the complete accessibility tree for prices.
+    /// </summary>
+    public IReadOnlyList<(string Text, Rectangle Bounds)> GetVisibleAccessibleTexts()
+    {
+        if (!TryLocateWindow(out var process, out var hwnd) || process is null)
+            return Array.Empty<(string Text, Rectangle Bounds)>();
+        try
+        {
+            using var app = FlaUI.Core.Application.Attach(process);
+            using var automation = new UIA3Automation();
+            var window = automation.FromHandle(hwnd);
+            if (window is null) return Array.Empty<(string Text, Rectangle Bounds)>();
+            var windowBounds = window.BoundingRectangle;
+            var chatViewport = Rectangle.FromLTRB(
+                windowBounds.Left + (int)(windowBounds.Width * 0.20),
+                windowBounds.Top + (int)(windowBounds.Height * 0.10),
+                windowBounds.Left + (int)(windowBounds.Width * 0.80),
+                windowBounds.Top + (int)(windowBounds.Height * 0.90));
+            return window.FindAllDescendants(cf => cf.ByControlType(ControlType.Text))
+                .Select(element => (Text: element.Name?.Trim() ?? "", Bounds: element.BoundingRectangle))
+                .Where(item => item.Text.Length > 0 && item.Bounds.Width >= 4 && item.Bounds.Height >= 6 &&
+                               chatViewport.IntersectsWith(item.Bounds))
+                .Distinct()
+                .OrderBy(item => item.Bounds.Top)
+                .ThenBy(item => item.Bounds.Left)
+                .ToArray();
+        }
+        catch
+        {
+            return Array.Empty<(string Text, Rectangle Bounds)>();
+        }
+    }
+
+    /// <summary>
     /// Detect a captcha only when its UIA text node has a real on-screen
     /// rectangle in the QQ chat viewport. QQ keeps solved captcha messages in
     /// its accessibility tree, so text presence alone is not sufficient.
@@ -669,7 +705,8 @@ public sealed class QqDesktopClient
             return baseObservation;
         }
 
-        var accessiblePrices = ParseAccessibleMarketPrices(GetAccessibleTexts());
+        var accessiblePrices = ParseAccessibleMarketPrices(
+            GetVisibleAccessibleTexts().Select(item => item.Text).ToArray());
         await RecordOcrAuditAsync("info", "market_text_enrich",
             $"regions={regions.Count}; baseResolved={baseResolved.Length}; resolved={resolved.Count}; " +
             $"rowPrices={resolved.Count(x => x.Price is not null)}; uiaPrices={accessiblePrices.Count}");
