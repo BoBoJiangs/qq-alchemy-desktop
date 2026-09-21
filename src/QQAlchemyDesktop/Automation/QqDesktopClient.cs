@@ -943,6 +943,29 @@ public sealed class QqDesktopClient
             }
             if (!PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName, requireBotMention, out command))
             {
+                // QQNT may expose the link as Invoke-capable while doing
+                // nothing when Invoke is called.  Retry with a real click,
+                // then validate the generated command again before sending.
+                ClearInput(input);
+                Click(point.X, point.Y);
+                await Task.Delay(450, cancellationToken);
+                preparedText = TryReadInputText(process, settings);
+                if (!PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName,
+                        requireBotMention, out command))
+                {
+                    try
+                    {
+                        var retryObservation = await ObserveRegionTwiceAsync(settings.InputRegion, cancellationToken);
+                        preparedText = retryObservation.RawText;
+                    }
+                    catch (OcrConflictException)
+                    {
+                        preparedText = "";
+                    }
+                }
+            }
+            if (!PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName, requireBotMention, out command))
+            {
                 ClearInput(input);
                 await _store.AuditAsync("warn", "market_click_input_invalid",
                     $"{listing.HerbName} screen={point.X},{point.Y} input={preparedText}",
