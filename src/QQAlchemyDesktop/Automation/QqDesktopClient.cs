@@ -973,6 +973,34 @@ public sealed class QqDesktopClient
             }
             if (!PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName, requireBotMention, out command))
             {
+                // On some QQNT cards the visible item name is a decorative
+                // hyperlink and the actionable purchase link is the
+                // "物品功效" link immediately to its left/above.  Try that
+                // adjacent link only as a last resort; sending still requires
+                // a validated purchase code below.
+                var effectPoint = new Point(point.X - 100, point.Y - 24);
+                await _store.AuditAsync("info", "market_click_effect_fallback",
+                    $"{listing.HerbName} screen={effectPoint.X},{effectPoint.Y}",
+                    listing.ListingToken, cancellationToken);
+                Click(effectPoint.X, effectPoint.Y);
+                await Task.Delay(450, cancellationToken);
+                preparedText = TryReadInputText(process, settings);
+                if (!PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName,
+                        requireBotMention, out command))
+                {
+                    try
+                    {
+                        var effectObservation = await ObserveRegionTwiceAsync(settings.InputRegion, cancellationToken);
+                        preparedText = effectObservation.RawText;
+                    }
+                    catch (OcrConflictException)
+                    {
+                        preparedText = "";
+                    }
+                }
+            }
+            if (!PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName, requireBotMention, out command))
+            {
                 ClearInput(input);
                 await _store.AuditAsync("warn", "market_click_input_invalid",
                     $"{listing.HerbName} screen={point.X},{point.Y} input={preparedText}",
