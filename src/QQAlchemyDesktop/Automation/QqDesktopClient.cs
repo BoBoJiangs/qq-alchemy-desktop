@@ -899,6 +899,11 @@ public sealed class QqDesktopClient
             var input = settings.InputRegion.ToPixels(windowBounds);
             var point = new Point(chat.Left + listing.ClickRect.Center.X, chat.Top + listing.ClickRect.Center.Y);
 
+            await _store.AuditAsync("info", "market_click_attempt",
+                $"{listing.HerbName} rect={listing.ClickRect} screen={point.X},{point.Y} " +
+                $"chat={chat.Left},{chat.Top},{chat.Width},{chat.Height}",
+                listing.ListingToken, cancellationToken);
+
             Click(input.Left + input.Width / 2, input.Top + input.Height / 2);
             await Task.Delay(120, cancellationToken);
             KeyChord(NativeMethods.VkControl, NativeMethods.VkA);
@@ -939,6 +944,9 @@ public sealed class QqDesktopClient
             if (!PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName, requireBotMention, out command))
             {
                 ClearInput(input);
+                await _store.AuditAsync("warn", "market_click_input_invalid",
+                    $"{listing.HerbName} screen={point.X},{point.Y} input={preparedText}",
+                    listing.ListingToken, cancellationToken);
                 var mentionHint = requireBotMention ? "@机器人、" : "";
                 throw new InvalidOperationException($"点击药材后未能确认输入框中的 {mentionHint}坊市购买命令和采购码，已清空并拒绝发送");
             }
