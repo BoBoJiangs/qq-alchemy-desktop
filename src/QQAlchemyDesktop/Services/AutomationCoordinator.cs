@@ -15,6 +15,7 @@ public sealed class AutomationCoordinator : BackgroundService
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly Dictionary<string, int> _inventory = new(StringComparer.Ordinal);
     private readonly List<MarketListing> _candidates = [];
+    private readonly Queue<MarketListing> _marketQueue = new();
     private readonly List<string> _alchemyQueue = [];
     private AutomationCheckpoint _checkpoint = new();
     private string? _lastFrameHash;
@@ -171,7 +172,7 @@ public sealed class AutomationCoordinator : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         await InitializeAsync(stoppingToken);
-        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(850));
+        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(450));
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
             try { await TickAsync(stoppingToken); }
@@ -224,7 +225,20 @@ public sealed class AutomationCoordinator : BackgroundService
                 return;
             }
 
-            var observation = await _qq.ObserveChatAsync(cancellationToken);
+            OcrObservation observation;
+            if (_checkpoint.State == AutomationState.ScanningMarket)
+            {
+                var purchaseRules = await _store.GetSettingAsync<List<PurchaseRule>>("purchaseRules",
+                    cancellationToken) ?? [];
+                // ObserveMarketAsync already performs the base chat capture;
+                // avoid doing a second full OCR pass before enriching it.
+                observation = await _qq.ObserveMarketAsync(
+                    purchaseRules.Select(rule => rule.HerbName), cancellationToken);
+            }
+            else
+            {
+                observation = await _qq.ObserveChatAsync(cancellationToken);
+            }
             _checkpoint.LastOcrText = observation.RawText;
             if (observation.FrameHash == _lastFrameHash) return;
             _lastFrameHash = observation.FrameHash;
@@ -264,12 +278,7 @@ public sealed class AutomationCoordinator : BackgroundService
                 }
                 case AutomationState.ScanningMarket:
                 {
-                    var purchaseRules = await _store.GetSettingAsync<List<PurchaseRule>>("purchaseRules",
-                        cancellationToken) ?? [];
-                    var marketObservation = await _qq.ObserveMarketAsync(
-                        purchaseRules.Select(rule => rule.HerbName), cancellationToken);
-                    _checkpoint.LastOcrText = marketObservation.RawText;
-                    OcrResponseGate.TryExtractLatest(marketObservation, 30, out var marketResponse);
+                    OcrResponseGate.TryExtractLatest(observation, 30, out var marketResponse);
                     await HandleMarketLockedAsync(marketResponse, cancellationToken);
                     break;
                 }
@@ -383,26 +392,24 @@ public sealed class AutomationCoordinator : BackgroundService
         _deadline = null;
         _queryRetried = false;
 
-        var selected = PurchaseSelector.Select(parsed, rules, _inventory);
-        if (selected is not null)
+        var selected = PurchaseSelector.SelectAll(parsed, rules, _inventory);
+        _marketQueue.Clear();
+        foreach (var listing in selected) _marketQueue.Enqueue(listing);
+        if (selected.Count > 0)
         {
             _checkpoint.EmptyMarketRounds = 0;
             if (settings.DryRun)
             {
-                await _store.AuditAsync("info", "dry_run_candidate",
-                    $"{selected.HerbName} {selected.PriceWan:0.####}万 page={selected.Page}", selected.ListingToken, cancellationToken);
+                foreach (var listing in selected)
+                {
+                    await _store.AuditAsync("info", "dry_run_candidate",
+                        $"{listing.HerbName} {listing.PriceWan:0.####}万 page={listing.Page} " +
+                        $"queue={selected.Count}", listing.ListingToken, cancellationToken);
+                }
                 await AdvanceMarketPageLockedAsync(settings, cancellationToken);
                 return;
             }
-            _pendingListing = selected;
-            _checkpoint.Step = $"准备购买：{selected.HerbName} {selected.PriceWan:0.####}万";
-            _checkpoint.PendingActionId = selected.ListingToken;
-            await DelayActionAsync(settings, cancellationToken);
-            await _qq.ClickAndSendListingAsync(selected, cancellationToken);
-            _lastQuery = "坊市购买";
-            _checkpoint.State = AutomationState.WaitingPurchaseResult;
-            _checkpoint.Step = $"等待购买结果：{selected.HerbName} {selected.PriceWan:0.####}万";
-            _deadline = DateTimeOffset.Now.AddSeconds(20);
+            await SendNextMarketPurchaseLockedAsync(settings, cancellationToken);
             return;
         }
 
@@ -428,7 +435,14 @@ public sealed class AutomationCoordinator : BackgroundService
             _pendingListing = null;
             _checkpoint.PendingActionId = null;
             _checkpoint.State = AutomationState.ScanningMarket;
-            await AdvanceMarketPageLockedAsync(settings, cancellationToken);
+            if (_marketQueue.Count > 0)
+            {
+                await SendNextMarketPurchaseLockedAsync(settings, cancellationToken);
+            }
+            else
+            {
+                await AdvanceMarketPageLockedAsync(settings, cancellationToken);
+            }
             return;
         }
         if (MessageClassifier.IsPurchaseTerminal(text))
@@ -442,8 +456,44 @@ public sealed class AutomationCoordinator : BackgroundService
             _pendingListing = null;
             _checkpoint.PendingActionId = null;
             _checkpoint.State = AutomationState.ScanningMarket;
-            await AdvanceMarketPageLockedAsync(settings, cancellationToken);
+            if (_marketQueue.Count > 0)
+            {
+                await SendNextMarketPurchaseLockedAsync(settings, cancellationToken);
+            }
+            else
+            {
+                await AdvanceMarketPageLockedAsync(settings, cancellationToken);
+            }
         }
+    }
+
+    private async Task SendNextMarketPurchaseLockedAsync(AlchemySettings settings,
+        CancellationToken cancellationToken)
+    {
+        if (PurchaseSelector.HasReachedTaskLimit(_checkpoint.PurchaseCount, settings.TaskPurchaseLimit))
+        {
+            await CompleteLockedAsync($"达到单次采购上限 {settings.TaskPurchaseLimit}", cancellationToken);
+            return;
+        }
+        if (_marketQueue.Count == 0)
+        {
+            await AdvanceMarketPageLockedAsync(settings, cancellationToken);
+            return;
+        }
+
+        var selected = _marketQueue.Dequeue();
+        _pendingListing = selected;
+        _checkpoint.State = AutomationState.ScanningMarket;
+        _checkpoint.Step = $"准备购买：{selected.HerbName} {selected.PriceWan:0.####}万 " +
+                           $"（本页剩余 {_marketQueue.Count}）";
+        _checkpoint.PendingActionId = selected.ListingToken;
+        await DelayActionAsync(settings, ActionDelayKind.Purchase, cancellationToken);
+        await _qq.ClickAndSendListingAsync(selected, cancellationToken);
+        _lastQuery = "坊市购买";
+        _checkpoint.State = AutomationState.WaitingPurchaseResult;
+        _checkpoint.Step = $"等待购买结果：{selected.HerbName} {selected.PriceWan:0.####}万 " +
+                           $"（本页剩余 {_marketQueue.Count}）";
+        _deadline = DateTimeOffset.Now.AddSeconds(20);
     }
 
     private async Task HandleAlchemyResultLockedAsync(string text, CancellationToken cancellationToken)
@@ -494,7 +544,7 @@ public sealed class AutomationCoordinator : BackgroundService
         _checkpoint.PendingActionId = actionId;
         _lastQuery = command;
         await _store.SaveCheckpointAsync(_checkpoint, cancellationToken);
-        await DelayActionAsync(settings, cancellationToken);
+        await DelayActionAsync(settings, ActionDelayKind.Alchemy, cancellationToken);
         await _qq.SendAtCommandAsync(command, cancellationToken);
         _deadline = DateTimeOffset.Now.AddSeconds(30);
     }
@@ -506,7 +556,7 @@ public sealed class AutomationCoordinator : BackgroundService
         _lastQuery = command;
         await _store.SaveCheckpointAsync(_checkpoint, cancellationToken);
         var settings = await _store.GetSettingAsync<AlchemySettings>("alchemy", cancellationToken) ?? new AlchemySettings();
-        await DelayActionAsync(settings, cancellationToken);
+        await DelayActionAsync(settings, ActionDelayKind.Query, cancellationToken);
         await _qq.SendAtCommandAsync(command, cancellationToken);
         _deadline = DateTimeOffset.Now.AddSeconds(20);
     }
@@ -565,11 +615,29 @@ public sealed class AutomationCoordinator : BackgroundService
         await _store.AuditAsync("info", "task_completed", reason, cancellationToken: cancellationToken);
     }
 
-    private static async Task DelayActionAsync(AlchemySettings settings, CancellationToken cancellationToken)
+    internal enum ActionDelayKind
     {
-        var configuredMax = Math.Max(settings.RandomDelay, 5);
-        var seconds = Random.Shared.Next(2, configuredMax + 1);
-        await Task.Delay(TimeSpan.FromSeconds(seconds), cancellationToken);
+        Query,
+        Purchase,
+        Alchemy
+    }
+
+    internal static (int MinimumMilliseconds, int MaximumMilliseconds) GetActionDelayBounds(
+        int randomDelaySeconds, ActionDelayKind kind)
+    {
+        var baseline = kind == ActionDelayKind.Purchase ? 450 : 700;
+        var extra = Math.Clamp(randomDelaySeconds, 0, 30) * 1000;
+        return (baseline, baseline + extra);
+    }
+
+    private static async Task DelayActionAsync(AlchemySettings settings, ActionDelayKind kind,
+        CancellationToken cancellationToken)
+    {
+        var bounds = GetActionDelayBounds(settings.RandomDelay, kind);
+        var milliseconds = bounds.MaximumMilliseconds == bounds.MinimumMilliseconds
+            ? bounds.MinimumMilliseconds
+            : Random.Shared.Next(bounds.MinimumMilliseconds, bounds.MaximumMilliseconds + 1);
+        await Task.Delay(milliseconds, cancellationToken);
     }
 
     private void ResetRuntime()
@@ -581,6 +649,7 @@ public sealed class AutomationCoordinator : BackgroundService
         _pendingListing = null;
         _lastQuery = null;
         _candidates.Clear();
+        _marketQueue.Clear();
         _alchemyQueue.Clear();
     }
 

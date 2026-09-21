@@ -184,6 +184,15 @@ public sealed class CoreTests : IDisposable
         Assert.Equal("CHEAP", Assert.Single(selected).ListingToken);
     }
 
+    [Fact]
+    public void AutomationCoordinator_UsesShortBaselineAndHonorsOptionalRandomDelay()
+    {
+        Assert.Equal((450, 450), AutomationCoordinator.GetActionDelayBounds(
+            0, AutomationCoordinator.ActionDelayKind.Purchase));
+        Assert.Equal((700, 2700), AutomationCoordinator.GetActionDelayBounds(
+            2, AutomationCoordinator.ActionDelayKind.Query));
+    }
+
     [Theory]
     [InlineData(960, 764, true)]
     [InlineData(399, 764, false)]
