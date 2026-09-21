@@ -69,6 +69,14 @@ public sealed class OcrAutomationTests
     }
 
     [Fact]
+    public void PurchaseCommandValidator_AcceptsOcrTrailingPresentationNoise()
+    {
+        Assert.True(PurchaseCommandValidator.TryValidate(
+            "@小小 坊市购买22906fc8-99c2-4356-a466-4c17e3d8dcb5|", "小小", false, out var command));
+        Assert.Equal("坊市购买22906fc8-99c2-4356-a466-4c17e3d8dcb5", command);
+    }
+
+    [Fact]
     public void OcrConsensus_NormalizesPresentationNoiseButRejectsDifferentContent()
     {
         Assert.True(OcrConsensus.AreEquivalent("药材背包： 1 页", "药材背包:1页"));

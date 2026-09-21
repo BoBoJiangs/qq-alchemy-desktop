@@ -951,7 +951,9 @@ public sealed class QqDesktopClient
             {
                 try
                 {
-                    var inputObservation = await ObserveRegionTwiceAsync(settings.InputRegion, cancellationToken);
+                    var inputObservation = await ObserveRegionTwiceAsync(
+                        ExpandChatRegion(settings.InputRegion), cancellationToken,
+                        allowLiveRefresh: true);
                     preparedText = inputObservation.RawText;
                 }
                 catch (OcrConflictException)
@@ -973,7 +975,9 @@ public sealed class QqDesktopClient
                 {
                     try
                     {
-                        var retryObservation = await ObserveRegionTwiceAsync(settings.InputRegion, cancellationToken);
+                        var retryObservation = await ObserveRegionTwiceAsync(
+                            ExpandChatRegion(settings.InputRegion), cancellationToken,
+                            allowLiveRefresh: true);
                         preparedText = retryObservation.RawText;
                     }
                     catch (OcrConflictException)
@@ -1001,7 +1005,9 @@ public sealed class QqDesktopClient
                 {
                     try
                     {
-                        var effectObservation = await ObserveRegionTwiceAsync(settings.InputRegion, cancellationToken);
+                        var effectObservation = await ObserveRegionTwiceAsync(
+                            ExpandChatRegion(settings.InputRegion), cancellationToken,
+                            allowLiveRefresh: true);
                         preparedText = effectObservation.RawText;
                     }
                     catch (OcrConflictException)
