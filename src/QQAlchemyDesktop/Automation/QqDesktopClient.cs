@@ -708,52 +708,91 @@ public sealed class QqDesktopClient
 
         var resolved = new List<(string Name, PixelRect Bounds, double? Price)>();
         var usedNames = new HashSet<string>(StringComparer.Ordinal);
+        // Try one full-card OCR first.  The row crops remain a deliberate
+        // fallback because very small blue names are sometimes missed when
+        // they are surrounded by other card text.
+        var fullMarketObservation = await _ocr.RecognizeAsync(bitmap, cancellationToken);
+        var fullMarketWords = fullMarketObservation.Words
+            .Select(word => (Word: word, Name: resolver.Resolve(word.Text)))
+            .ToArray();
         foreach (var region in regions)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var rowTop = Math.Max(0, region.Y - 8);
             var rowBottom = Math.Min(bitmap.Height, region.Y + region.Height + 8);
             var rowHeight = Math.Max(1, rowBottom - rowTop);
-            using var row = bitmap.Clone(new Rectangle(0, rowTop, bitmap.Width, rowHeight),
-                PixelFormat.Format32bppArgb);
-            var rowObservation = await _ocr.RecognizeAsync(row, cancellationToken);
-            var candidate = rowObservation.Words
-                .Select(word =>
+            var candidate = fullMarketWords
+                .Where(x => x.Name is not null &&
+                            x.Word.Bounds.Y + x.Word.Bounds.Height / 2 >= rowTop &&
+                            x.Word.Bounds.Y + x.Word.Bounds.Height / 2 <= rowBottom &&
+                            !usedNames.Contains(x.Name!))
+                .Select(x =>
                 {
-                    var shifted = word with
+                    var shifted = x.Word with
                     {
-                        Bounds = word.Bounds with
+                        Bounds = x.Word.Bounds with
                         {
-                            X = word.Bounds.X + offsetX,
-                            Y = word.Bounds.Y + rowTop + offsetY
+                            X = x.Word.Bounds.X + offsetX,
+                            Y = x.Word.Bounds.Y + offsetY
                         }
                     };
-                    return (Word: shifted, Name: resolver.Resolve(word.Text));
+                    return (Word: shifted, Name: x.Name!);
                 })
-                .Where(x => x.Name is not null)
-                .Select(x => (x.Word, Name: x.Name!))
-                .Where(x => !usedNames.Contains(x.Name))
                 .OrderByDescending(x => x.Word.Confidence)
                 .FirstOrDefault();
-            if (candidate.Name is null) continue;
 
-            var price = ParseMarketPrice(rowObservation.RawText);
-            if (price is null)
+            var fullRowText = string.Join(" ", fullMarketObservation.Words
+                .Where(word => word.Bounds.Y + word.Bounds.Height / 2 >= rowTop &&
+                               word.Bounds.Y + word.Bounds.Height / 2 <= rowBottom)
+                .OrderBy(word => word.Bounds.X)
+                .Select(word => word.Text));
+            var price = ParseMarketPrice(fullRowText);
+            if (candidate.Name is null || price is null)
             {
-                var nameCrop = bitmap.Clone(new Rectangle(
-                    Math.Max(0, region.X - 6), rowTop,
-                    Math.Min(bitmap.Width - Math.Max(0, region.X - 6), region.Width + 12), rowHeight),
+                using var row = bitmap.Clone(new Rectangle(0, rowTop, bitmap.Width, rowHeight),
                     PixelFormat.Format32bppArgb);
-                try
+                var rowObservation = await _ocr.RecognizeAsync(row, cancellationToken);
+                if (candidate.Name is null)
                 {
-                    var nameObservation = await _ocr.RecognizeAsync(nameCrop, cancellationToken);
-                    price = ParseMarketPrice(nameObservation.RawText);
+                    candidate = rowObservation.Words
+                        .Select(word =>
+                        {
+                            var shifted = word with
+                            {
+                                Bounds = word.Bounds with
+                                {
+                                    X = word.Bounds.X + offsetX,
+                                    Y = word.Bounds.Y + rowTop + offsetY
+                                }
+                            };
+                            return (Word: shifted, Name: resolver.Resolve(word.Text));
+                        })
+                        .Where(x => x.Name is not null)
+                        .Select(x => (x.Word, Name: x.Name!))
+                        .Where(x => !usedNames.Contains(x.Name))
+                        .OrderByDescending(x => x.Word.Confidence)
+                        .FirstOrDefault();
                 }
-                finally
+                if (price is null) price = ParseMarketPrice(rowObservation.RawText);
+                if (candidate.Name is not null && price is null)
                 {
-                    nameCrop.Dispose();
+                    var nameCrop = bitmap.Clone(new Rectangle(
+                        Math.Max(0, region.X - 6), rowTop,
+                        Math.Min(bitmap.Width - Math.Max(0, region.X - 6), region.Width + 12), rowHeight),
+                        PixelFormat.Format32bppArgb);
+                    try
+                    {
+                        var nameObservation = await _ocr.RecognizeAsync(nameCrop, cancellationToken);
+                        price = ParseMarketPrice(nameObservation.RawText);
+                    }
+                    finally
+                    {
+                        nameCrop.Dispose();
+                    }
                 }
             }
+
+            if (candidate.Name is null) continue;
 
             usedNames.Add(candidate.Name);
             resolved.Add((candidate.Name, candidate.Word.Bounds, price));
@@ -773,7 +812,8 @@ public sealed class QqDesktopClient
             GetVisibleAccessibleTexts().Select(item => item.Text).ToArray());
         await RecordOcrAuditAsync("info", "market_text_enrich",
             $"regions={regions.Count}; baseResolved={baseResolved.Length}; resolved={resolved.Count}; " +
-            $"rowPrices={resolved.Count(x => x.Price is not null)}; uiaPrices={accessiblePrices.Count}");
+            $"fullWords={fullMarketWords.Length}; rowPrices={resolved.Count(x => x.Price is not null)}; " +
+            $"uiaPrices={accessiblePrices.Count}");
         var words = new List<OcrWordData>();
         foreach (var item in resolved.Select((value, index) => (value, index)))
         {
