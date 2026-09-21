@@ -77,6 +77,31 @@ public sealed class OcrAutomationTests
     }
 
     [Fact]
+    public void PurchaseCommandValidator_AllowsSeveralCapturedCodesToBeSentInOrder()
+    {
+        var captured = new[]
+        {
+            "坊市购买22906fc8-99c2-4356-a466-4c17e3d8dcb5",
+            "@小小 坊市购买A2906FC8-99C2-4356-A466-4C17E3D8DCB5",
+            "坊市购买32906fc8-99c2-4356-a466-4c17e3d8dcb5"
+        };
+
+        var normalized = captured
+            .Select(text => PurchaseCommandValidator.TryValidate(
+                text, "小小", requireBotMention: false, out var command)
+                ? command
+                : null)
+            .ToArray();
+
+        Assert.Equal(new[]
+        {
+            "坊市购买22906fc8-99c2-4356-a466-4c17e3d8dcb5",
+            "坊市购买a2906fc8-99c2-4356-a466-4c17e3d8dcb5",
+            "坊市购买32906fc8-99c2-4356-a466-4c17e3d8dcb5"
+        }, normalized);
+    }
+
+    [Fact]
     public void OcrConsensus_NormalizesPresentationNoiseButRejectsDifferentContent()
     {
         Assert.True(OcrConsensus.AreEquivalent("药材背包： 1 页", "药材背包:1页"));

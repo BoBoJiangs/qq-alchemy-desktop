@@ -16,6 +16,7 @@ public sealed class AutomationCoordinator : BackgroundService
     private readonly Dictionary<string, int> _inventory = new(StringComparer.Ordinal);
     private readonly List<MarketListing> _candidates = [];
     private readonly Queue<MarketListing> _marketQueue = new();
+    private readonly Dictionary<string, string> _marketCommands = new(StringComparer.Ordinal);
     private readonly List<string> _alchemyQueue = [];
     private AutomationCheckpoint _checkpoint = new();
     private string? _lastFrameHash;
@@ -415,11 +416,44 @@ public sealed class AutomationCoordinator : BackgroundService
                 await AdvanceMarketPageLockedAsync(settings, cancellationToken);
                 return;
             }
+            await CaptureMarketCommandsLockedAsync(selected, cancellationToken);
             await SendNextMarketPurchaseLockedAsync(settings, cancellationToken);
             return;
         }
 
         await AdvanceMarketPageLockedAsync(settings, cancellationToken);
+    }
+
+    private async Task CaptureMarketCommandsLockedAsync(
+        IReadOnlyList<MarketListing> listings, CancellationToken cancellationToken)
+    {
+        _marketCommands.Clear();
+        try
+        {
+            foreach (var listing in listings)
+            {
+                _checkpoint.State = AutomationState.ScanningMarket;
+                _checkpoint.Step = $"采集采购码：{listing.HerbName} " +
+                                   $"（剩余 {listings.Count - _marketCommands.Count - 1}）";
+                _checkpoint.PendingActionId = listing.ListingToken;
+                var command = await _qq.CaptureListingCommandAsync(listing, cancellationToken);
+                _marketCommands[listing.ListingToken] = command;
+                await _store.AuditAsync("info", "market_purchase_code_captured",
+                    $"{listing.HerbName} {listing.PriceWan:0.####}万 page={listing.Page} " +
+                    $"command={command} captured={_marketCommands.Count}/{listings.Count}",
+                    listing.ListingToken, cancellationToken);
+            }
+        }
+        catch
+        {
+            // Do not leave a partially captured queue eligible for sending.
+            _marketCommands.Clear();
+            throw;
+        }
+        finally
+        {
+            _checkpoint.PendingActionId = null;
+        }
     }
 
     private async Task HandlePurchaseResultLockedAsync(string text, CancellationToken cancellationToken)
@@ -435,6 +469,7 @@ public sealed class AutomationCoordinator : BackgroundService
             var settings = await _store.GetSettingAsync<AlchemySettings>("alchemy", cancellationToken) ?? new AlchemySettings();
             if (PurchaseSelector.HasReachedTaskLimit(_checkpoint.PurchaseCount, settings.TaskPurchaseLimit))
             {
+                _marketCommands.Clear();
                 await CompleteLockedAsync($"达到单次采购上限 {settings.TaskPurchaseLimit}", cancellationToken);
                 return;
             }
@@ -453,6 +488,7 @@ public sealed class AutomationCoordinator : BackgroundService
         }
         if (MessageClassifier.IsPurchaseTerminal(text))
         {
+            _marketCommands.Clear();
             await CompleteLockedAsync("检测到余额不足或今日操作上限，采购结束", cancellationToken);
             return;
         }
@@ -488,13 +524,15 @@ public sealed class AutomationCoordinator : BackgroundService
         }
 
         var selected = _marketQueue.Dequeue();
+        if (!_marketCommands.TryGetValue(selected.ListingToken, out var command))
+            throw new InvalidOperationException($"未找到 {selected.HerbName} 的已校验采购码");
         _pendingListing = selected;
         _checkpoint.State = AutomationState.ScanningMarket;
         _checkpoint.Step = $"准备购买：{selected.HerbName} {selected.PriceWan:0.####}万 " +
                            $"（本页剩余 {_marketQueue.Count}）";
         _checkpoint.PendingActionId = selected.ListingToken;
         await DelayActionAsync(settings, ActionDelayKind.Purchase, cancellationToken);
-        await _qq.ClickAndSendListingAsync(selected, cancellationToken);
+        await _qq.SendPurchaseCommandAsync(selected, command, cancellationToken);
         _lastQuery = "坊市购买";
         _checkpoint.State = AutomationState.WaitingPurchaseResult;
         _checkpoint.Step = $"等待购买结果：{selected.HerbName} {selected.PriceWan:0.####}万 " +
@@ -536,6 +574,7 @@ public sealed class AutomationCoordinator : BackgroundService
         }
         _checkpoint.State = AutomationState.ScanningMarket;
         _checkpoint.Step = $"扫描坊市药材第 {_checkpoint.CurrentPage} 页";
+        _marketCommands.Clear();
         await SendQueryLockedAsync($"查看坊市药材{_checkpoint.CurrentPage}", cancellationToken);
     }
 
@@ -660,6 +699,7 @@ public sealed class AutomationCoordinator : BackgroundService
         _lastQuery = null;
         _candidates.Clear();
         _marketQueue.Clear();
+        _marketCommands.Clear();
         _alchemyQueue.Clear();
     }
 

@@ -957,14 +957,13 @@ public sealed class QqDesktopClient
         }
     }
 
-    public async Task<string> ClickAndSendListingAsync(MarketListing listing, CancellationToken cancellationToken = default)
+    public async Task<string> CaptureListingCommandAsync(MarketListing listing,
+        CancellationToken cancellationToken = default)
     {
         await _inputGate.WaitAsync(cancellationToken);
         try
         {
             var settings = await RequireVerifiedCalibrationAsync(cancellationToken);
-            var behavior = await _store.GetSettingAsync<AlchemySettings>("alchemy", cancellationToken) ?? new AlchemySettings();
-            var requireBotMention = !behavior.AllowUnmentionedCommands;
             if (!await VerifyGroupOnlyAsync(settings, cancellationToken))
                 throw new InvalidOperationException("当前 QQ 群标题不匹配，拒绝点击");
             if (!TryLocateWindow(out var process, out var hwnd) || process is null)
@@ -991,21 +990,12 @@ public sealed class QqDesktopClient
                 var fresh = await ObserveRegionTwiceAsync(settings.ChatRegion, cancellationToken);
                 if (!string.Equals(fresh.FrameHash, listing.FrameHash, StringComparison.Ordinal))
                 {
-                    // A purchase response can scroll the same market card
-                    // without issuing a new market query.  Re-resolve only
-                    // this herb instead of rejecting the whole page queue.
-                    var refreshed = await ObserveMarketAsync([listing.HerbName], cancellationToken);
-                    var current = MarketParser.Parse(refreshed, listing.Page,
-                            new HerbNameResolver([listing.HerbName]))
-                        .FirstOrDefault(item => item.HerbName == listing.HerbName);
-                    if (current is null)
-                        throw new InvalidOperationException($"坊市页面已变化，未能重新定位 {listing.HerbName}");
-                    listing = current;
-                    point = new Point(chat.Left + listing.ClickRect.Center.X,
-                        chat.Top + listing.ClickRect.Center.Y + Math.Max(2, listing.ClickRect.Height / 3));
-                    await _store.AuditAsync("info", "market_click_relocated",
-                        $"{listing.HerbName} screen={point.X},{point.Y}",
-                        listing.ListingToken, cancellationToken);
+                    // The coordinator deliberately captures every command
+                    // before sending any purchase.  If the card moved during
+                    // that capture phase, do not issue a new market query and
+                    // do not guess a replacement coordinate: pause safely so
+                    // the user can inspect the changed page.
+                    throw new MarketListingNotVisibleException(listing.HerbName);
                 }
             }
 
@@ -1056,7 +1046,8 @@ public sealed class QqDesktopClient
             await Task.Delay(450, cancellationToken);
 
             var preparedText = TryReadInputText(process, settings);
-            if (!PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName, requireBotMention, out var command))
+            if (!PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName,
+                    requireBotMention: false, out var command))
             {
                 try
                 {
@@ -1070,7 +1061,8 @@ public sealed class QqDesktopClient
                     preparedText = "";
                 }
             }
-            if (!PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName, requireBotMention, out command))
+            if (!PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName,
+                    requireBotMention: false, out command))
             {
                 // QQNT may expose the link as Invoke-capable while doing
                 // nothing when Invoke is called.  Retry with a real click,
@@ -1080,7 +1072,7 @@ public sealed class QqDesktopClient
                 await Task.Delay(450, cancellationToken);
                 preparedText = TryReadInputText(process, settings);
                 if (!PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName,
-                        requireBotMention, out command))
+                        requireBotMention: false, out command))
                 {
                     try
                     {
@@ -1095,7 +1087,8 @@ public sealed class QqDesktopClient
                     }
                 }
             }
-            if (!PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName, requireBotMention, out command))
+            if (!PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName,
+                    requireBotMention: false, out command))
             {
                 // On some QQNT cards the visible item name is a decorative
                 // hyperlink and the actionable purchase link is the
@@ -1110,7 +1103,7 @@ public sealed class QqDesktopClient
                 await Task.Delay(450, cancellationToken);
                 preparedText = TryReadInputText(process, settings);
                 if (!PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName,
-                        requireBotMention, out command))
+                        requireBotMention: false, out command))
                 {
                     try
                     {
@@ -1125,24 +1118,19 @@ public sealed class QqDesktopClient
                     }
                 }
             }
-            if (!PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName, requireBotMention, out command))
+            if (!PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName,
+                    requireBotMention: false, out command))
             {
                 ClearInput(input);
                 await _store.AuditAsync("warn", "market_click_input_invalid",
                     $"{listing.HerbName} screen={point.X},{point.Y} input={preparedText}",
                     listing.ListingToken, cancellationToken);
-                var mentionHint = requireBotMention ? "@机器人、" : "";
-                throw new InvalidOperationException($"点击药材后未能确认输入框中的 {mentionHint}坊市购买命令和采购码，已清空并拒绝发送");
+                throw new InvalidOperationException("点击药材后未能确认输入框中的坊市购买命令和采购码，已清空并拒绝发送");
             }
-            if (!TryClickSendButton(settings))
-            {
-                ClearInput(input);
-                throw new InvalidOperationException("采购命令已生成并通过校验，但没有找到 QQ 的“发送”按钮，已清空并拒绝发送");
-            }
-            ScrollChatToBottom(settings.ChatRegion, windowBounds);
-            await _store.AuditAsync("info", "market_purchase_sent",
-                $"{listing.HerbName} {listing.PriceWan:0.####}万 page={listing.Page} command={command}",
-                listing.ListingToken, cancellationToken);
+            // The first phase only captures the validated command. Clear the
+            // single QQ input box so the next listing can be clicked while
+            // the market card is still on the original, stable page.
+            ClearInput(input);
             return command;
         }
         finally
@@ -1226,6 +1214,37 @@ public sealed class QqDesktopClient
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// Sends a previously captured and validated market command.  Separating
+    /// this from CaptureListingCommandAsync prevents purchase responses from
+    /// scrolling the market card while the remaining commands are collected.
+    /// </summary>
+    public async Task SendPurchaseCommandAsync(MarketListing listing, string command,
+        CancellationToken cancellationToken = default)
+    {
+        var settings = await RequireVerifiedCalibrationAsync(cancellationToken);
+        if (!PurchaseCommandValidator.TryValidate(command, settings.GameBotDisplayName,
+                requireBotMention: false, out var normalized))
+            throw new InvalidOperationException($"{listing.HerbName} 的采购码未通过最终校验，拒绝发送");
+
+        await SendAtCommandAsync(normalized, cancellationToken);
+        await _store.AuditAsync("info", "market_purchase_sent",
+            $"{listing.HerbName} {listing.PriceWan:0.####}万 page={listing.Page} command={normalized}",
+            listing.ListingToken, cancellationToken);
+    }
+
+    /// <summary>
+    /// Compatibility wrapper for callers that still need a single click and
+    /// send operation.  The coordinator uses the two-phase methods above.
+    /// </summary>
+    public async Task<string> ClickAndSendListingAsync(MarketListing listing,
+        CancellationToken cancellationToken = default)
+    {
+        var command = await CaptureListingCommandAsync(listing, cancellationToken);
+        await SendPurchaseCommandAsync(listing, command, cancellationToken);
+        return command;
     }
 
     private static void ScrollChatToBottom(NormalizedRect chatRegion, Rectangle windowBounds)
@@ -1891,4 +1910,12 @@ public sealed class OcrConflictException : Exception
     }
     public OcrObservation First { get; }
     public OcrObservation Second { get; }
+}
+
+public sealed class MarketListingNotVisibleException : InvalidOperationException
+{
+    public MarketListingNotVisibleException(string herbName)
+        : base($"采集采购码时坊市页面已变化，未重新查询以避免重复采购：{herbName}") => HerbName = herbName;
+
+    public string HerbName { get; }
 }
