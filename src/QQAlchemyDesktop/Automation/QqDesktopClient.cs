@@ -61,7 +61,9 @@ public sealed class QqDesktopClient
             var window = app.GetMainWindow(automation, TimeSpan.FromSeconds(2));
             if (window is not null)
             {
-                texts.AddRange(window.FindAllDescendants(cf => cf.ByControlType(ControlType.Text))
+                texts.AddRange(window.FindAllDescendants()
+                    .Where(element => element.ControlType == ControlType.Text ||
+                                      element.ControlType == ControlType.Hyperlink)
                     .Select(x => x.Name?.Trim())
                     .Where(x => !string.IsNullOrWhiteSpace(x))
                     .Distinct(StringComparer.Ordinal)
@@ -98,33 +100,104 @@ public sealed class QqDesktopClient
     /// </summary>
     public IReadOnlyList<(string Text, Rectangle Bounds)> GetVisibleAccessibleTexts()
     {
+        return GetAccessibleTextNodes(visibleOnly: true)
+            .Select(item => (item.Text, item.Bounds))
+            .ToArray();
+    }
+
+    private IReadOnlyList<AccessibleTextNode> GetAccessibleTextNodes(bool visibleOnly)
+    {
         if (!TryLocateWindow(out var process, out var hwnd) || process is null)
-            return Array.Empty<(string Text, Rectangle Bounds)>();
+            return Array.Empty<AccessibleTextNode>();
         try
         {
             using var app = FlaUI.Core.Application.Attach(process);
             using var automation = new UIA3Automation();
             var window = automation.FromHandle(hwnd);
-            if (window is null) return Array.Empty<(string Text, Rectangle Bounds)>();
-            var windowBounds = window.BoundingRectangle;
-            var chatViewport = Rectangle.FromLTRB(
-                windowBounds.Left + (int)(windowBounds.Width * 0.20),
-                windowBounds.Top + (int)(windowBounds.Height * 0.10),
-                windowBounds.Left + (int)(windowBounds.Width * 0.80),
-                windowBounds.Top + (int)(windowBounds.Height * 0.90));
-            return window.FindAllDescendants(cf => cf.ByControlType(ControlType.Text))
-                .Select(element => (Text: element.Name?.Trim() ?? "", Bounds: element.BoundingRectangle))
-                .Where(item => item.Text.Length > 0 && item.Bounds.Width >= 4 && item.Bounds.Height >= 6 &&
-                               chatViewport.IntersectsWith(item.Bounds))
-                .Distinct()
+            if (window is null) return Array.Empty<AccessibleTextNode>();
+            var chatViewport = GetChatViewport(window.BoundingRectangle);
+            return window.FindAllDescendants()
+                .Where(element => element.ControlType == ControlType.Text ||
+                                  element.ControlType == ControlType.Hyperlink)
+                .Select(element => new AccessibleTextNode(
+                    element.Name?.Trim() ?? "", element.BoundingRectangle))
+                .Where(item => item.Text.Length > 0 && item.Bounds.Width >= 4 &&
+                               item.Bounds.Height >= 6 &&
+                               (!visibleOnly || chatViewport.IntersectsWith(item.Bounds)))
+                .DistinctBy(item => (item.Text, item.Bounds.Left, item.Bounds.Top,
+                    item.Bounds.Width, item.Bounds.Height))
                 .OrderBy(item => item.Bounds.Top)
                 .ThenBy(item => item.Bounds.Left)
                 .ToArray();
         }
         catch
         {
-            return Array.Empty<(string Text, Rectangle Bounds)>();
+            return Array.Empty<AccessibleTextNode>();
         }
+    }
+
+    private static Rectangle GetChatViewport(Rectangle windowBounds) => Rectangle.FromLTRB(
+        windowBounds.Left + (int)(windowBounds.Width * 0.20),
+        windowBounds.Top + (int)(windowBounds.Height * 0.10),
+        windowBounds.Left + (int)(windowBounds.Width * 0.80),
+        windowBounds.Top + (int)(windowBounds.Height * 0.90));
+
+    private static bool TryGetWindowBounds(out Rectangle bounds)
+    {
+        bounds = Rectangle.Empty;
+        return TryLocateWindowBounds(out bounds);
+    }
+
+    /// <summary>
+    /// Reads the newest complete inventory card from QQ's full UIA tree.
+    /// QQ keeps the card's text nodes even after its top scrolls above the
+    /// viewport, so this avoids losing the first rows to a cropped OCR frame.
+    /// The footer must still be visible and match the requested page; that
+    /// freshness check prevents an old off-screen response from being reused.
+    /// </summary>
+    public bool TryObserveAccessibleInventoryPage(int expectedPage,
+        IReadOnlyCollection<string> knownHerbNames, out OcrObservation observation)
+    {
+        observation = default!;
+        if (expectedPage <= 0 || knownHerbNames.Count == 0) return false;
+        var nodes = GetAccessibleTextNodes(visibleOnly: false);
+        if (nodes.Count == 0 || !TryGetWindowBounds(out var windowBounds)) return false;
+        var chatViewport = GetChatViewport(windowBounds);
+        var pageMarker = nodes
+            .Where(node => ParsePageMarker(node.Text) is { Current: var current } &&
+                           current == expectedPage && chatViewport.IntersectsWith(node.Bounds))
+            .OrderByDescending(node => node.Bounds.Top)
+            .FirstOrDefault();
+        if (pageMarker is null) return false;
+
+        var title = nodes
+            .Where(node => IsInventoryTitle(node.Text, expectedPage) &&
+                           node.Bounds.Top <= pageMarker.Bounds.Top &&
+                           node.Bounds.Top >= pageMarker.Bounds.Top - 2200)
+            .OrderByDescending(node => node.Bounds.Top)
+            .FirstOrDefault();
+        if (title is null) return false;
+
+        var card = nodes
+            .Where(node => node.Bounds.Top >= title.Bounds.Top &&
+                           node.Bounds.Top <= pageMarker.Bounds.Bottom + 24)
+            .OrderBy(node => node.Bounds.Top)
+            .ThenBy(node => node.Bounds.Left)
+            .DistinctBy(node => (node.Text, node.Bounds.Left, node.Bounds.Top,
+                node.Bounds.Width, node.Bounds.Height))
+            .ToArray();
+        var raw = string.Join('\n', card.Select(node => node.Text));
+        if (!IsCompleteInventoryObservation(raw, expectedPage, knownHerbNames)) return false;
+
+        var words = card.Select(node => new OcrWordData(node.Text,
+            new PixelRect(node.Bounds.Left, node.Bounds.Top,
+                Math.Max(1, node.Bounds.Width), Math.Max(1, node.Bounds.Height)), 0.99d))
+            .ToArray();
+        var signature = string.Join('|', card.Select(node =>
+            $"{node.Text}:{node.Bounds.Left},{node.Bounds.Top},{node.Bounds.Width},{node.Bounds.Height}"));
+        var frameHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(signature)));
+        observation = new OcrObservation(raw, words, frameHash, DateTimeOffset.Now);
+        return true;
     }
 
     /// <summary>
@@ -193,6 +266,20 @@ public sealed class QqDesktopClient
         MessageClassifier.IsInventoryPage(text) &&
         (text.Contains("拥有数量", StringComparison.Ordinal) ||
          text.Contains("数量", StringComparison.Ordinal));
+
+    private static bool IsInventoryTitle(string text, int expectedPage) =>
+        string.Equals(text, "药材背包", StringComparison.Ordinal) ||
+        string.Equals(text, $"药材背包{expectedPage}", StringComparison.Ordinal);
+
+    private static (int Current, int Total)? ParsePageMarker(string text)
+    {
+        var compact = text.Replace(" ", "", StringComparison.Ordinal);
+        var match = Regex.Match(compact, @"第(?<current>\d+)页/共(?<total>\d+)页");
+        return match.Success && int.TryParse(match.Groups["current"].Value, out var current) &&
+               int.TryParse(match.Groups["total"].Value, out var total)
+            ? (current, total)
+            : null;
+    }
 
     internal static bool HasPurchaseSuccessFor(string text, string herbName)
     {
@@ -730,11 +817,15 @@ public sealed class QqDesktopClient
 
     internal static bool IsCompleteInventoryObservation(OcrObservation observation,
         int expectedPage, IReadOnlyCollection<string> knownHerbNames)
+        => IsCompleteInventoryObservation(observation.RawText, expectedPage, knownHerbNames);
+
+    internal static bool IsCompleteInventoryObservation(string rawText,
+        int expectedPage, IReadOnlyCollection<string> knownHerbNames)
     {
-        if (!HasInventoryPageFor(observation.RawText, expectedPage) || knownHerbNames.Count == 0)
+        if (!HasInventoryPageFor(rawText, expectedPage) || knownHerbNames.Count == 0)
             return false;
-        var entries = InventoryParser.Parse(observation.RawText, new HerbNameResolver(knownHerbNames));
-        var pageMatch = Regex.Match(OcrConsensus.Normalize(observation.RawText),
+        var entries = InventoryParser.Parse(rawText, new HerbNameResolver(knownHerbNames));
+        var pageMatch = Regex.Match(OcrConsensus.Normalize(rawText),
             @"第(?<current>\d+)页/共(?<total>\d+)页");
         if (!pageMatch.Success || !int.TryParse(pageMatch.Groups["current"].Value, out var current) ||
             !int.TryParse(pageMatch.Groups["total"].Value, out var total)) return false;
@@ -1923,6 +2014,7 @@ public sealed class QqDesktopClient
             : false;
     }
 
+    private sealed record AccessibleTextNode(string Text, Rectangle Bounds);
     private sealed record MentionCandidate(AutomationElement Element, string Text, Rectangle Rectangle);
     private sealed record MentionOcrMatch(string Text, PixelRect Bounds, string Signature = "");
 

@@ -24,6 +24,7 @@ public sealed class AutomationCoordinator : BackgroundService
     private DateTimeOffset? _deadline;
     private DateTimeOffset _nextAccessibleProbe = DateTimeOffset.MinValue;
     private DateTimeOffset _nextPurchaseResultOcrProbe = DateTimeOffset.MinValue;
+    private DateTimeOffset _nextInventoryAccessibleProbe = DateTimeOffset.MinValue;
     private DateTimeOffset _nextInventoryOcrProbe = DateTimeOffset.MinValue;
     private bool _queryRetried;
     private MarketListing? _pendingListing;
@@ -229,6 +230,7 @@ public sealed class AutomationCoordinator : BackgroundService
             }
 
             OcrObservation observation;
+            var inventoryTextFastPath = false;
             var inventoryOcrFastPath = false;
             var purchaseUiAFastPath = false;
             var purchaseOcrFastPath = false;
@@ -243,20 +245,24 @@ public sealed class AutomationCoordinator : BackgroundService
             }
             else if (_checkpoint.State == AutomationState.ReadingInventory)
             {
-                // UIA exposes the current page marker faster than OCR, but
-                // QQ often omits the hyperlink herb names from its Text
-                // nodes. Treat UIA as a readiness signal only, then let OCR
-                // remain the source of truth for the inventory entries.
-                var inventoryUiAReady = _qq.TryObserveVisibleInventoryPage(
-                    _checkpoint.CurrentPage, out _);
-                if (!inventoryUiAReady && DateTimeOffset.UtcNow < _nextInventoryOcrProbe)
-                    return;
-                _nextInventoryOcrProbe = DateTimeOffset.UtcNow.AddMilliseconds(600);
                 if (_calculator.HerbNames.Count == 0)
                     await _calculator.GenerateCatalogAsync(cancellationToken);
-                observation = await _qq.ObserveInventoryPageAsync(
-                    _checkpoint.CurrentPage, _calculator.HerbNames, cancellationToken);
-                inventoryOcrFastPath = true;
+                if (DateTimeOffset.UtcNow >= _nextInventoryAccessibleProbe &&
+                    _qq.TryObserveAccessibleInventoryPage(_checkpoint.CurrentPage,
+                        _calculator.HerbNames, out var accessibleInventory))
+                {
+                    _nextInventoryAccessibleProbe = DateTimeOffset.UtcNow.AddMilliseconds(600);
+                    observation = accessibleInventory;
+                    inventoryTextFastPath = true;
+                }
+                else
+                {
+                    if (DateTimeOffset.UtcNow < _nextInventoryOcrProbe) return;
+                    _nextInventoryOcrProbe = DateTimeOffset.UtcNow.AddMilliseconds(600);
+                    observation = await _qq.ObserveInventoryPageAsync(
+                        _checkpoint.CurrentPage, _calculator.HerbNames, cancellationToken);
+                    inventoryOcrFastPath = true;
+                }
             }
             else if (_checkpoint.State == AutomationState.WaitingPurchaseResult &&
                      _pendingListing is not null &&
@@ -326,7 +332,16 @@ public sealed class AutomationCoordinator : BackgroundService
                 case AutomationState.ReadingInventory:
                 {
                     OcrObservation inventoryResponse;
-                    if (inventoryOcrFastPath)
+                    if (inventoryTextFastPath)
+                    {
+                        if (!QqDesktopClient.HasInventoryPageFor(observation.RawText,
+                                _checkpoint.CurrentPage)) return;
+                        await _store.AuditAsync("info", "inventory_uia_full",
+                            $"第{_checkpoint.CurrentPage}页通过 QQ 全量文本读取，跳过 OCR",
+                            cancellationToken: cancellationToken);
+                        inventoryResponse = observation;
+                    }
+                    else if (inventoryOcrFastPath)
                     {
                         if (_lastQuery is not null &&
                             OcrResponseGate.TryExtractAfterCommand(observation, _lastQuery,
@@ -680,6 +695,7 @@ public sealed class AutomationCoordinator : BackgroundService
         var actionId = Guid.NewGuid().ToString("N");
         _checkpoint.PendingActionId = actionId;
         _lastQuery = command;
+        _nextInventoryAccessibleProbe = DateTimeOffset.MinValue;
         _nextInventoryOcrProbe = DateTimeOffset.MinValue;
         await _store.SaveCheckpointAsync(_checkpoint, cancellationToken);
         var settings = await _store.GetSettingAsync<AlchemySettings>("alchemy", cancellationToken) ?? new AlchemySettings();
@@ -795,6 +811,7 @@ public sealed class AutomationCoordinator : BackgroundService
         _pendingListing = null;
         _lastQuery = null;
         _nextPurchaseResultOcrProbe = DateTimeOffset.MinValue;
+        _nextInventoryAccessibleProbe = DateTimeOffset.MinValue;
         _nextInventoryOcrProbe = DateTimeOffset.MinValue;
         _candidates.Clear();
         _marketQueue.Clear();
