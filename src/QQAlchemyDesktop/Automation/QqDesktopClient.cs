@@ -636,7 +636,24 @@ public sealed class QqDesktopClient
             .Select(x => (x.Word, Name: x.Name!))
             .ToArray();
 
-        using var bitmap = await CaptureRegionAsync(settings.ChatRegion, cancellationToken);
+        // The calibration input region is intentionally narrow for typing,
+        // but the market card starts much farther left than the input box.
+        // Capture an expanded market area and translate its OCR coordinates
+        // back to the configured chat region before creating a listing.
+        var marketRegion = new NormalizedRect(
+            Math.Max(0, settings.ChatRegion.X - 0.18),
+            settings.ChatRegion.Y,
+            Math.Min(1 - Math.Max(0, settings.ChatRegion.X - 0.18),
+                settings.ChatRegion.Width + 0.18),
+            settings.ChatRegion.Height);
+        using var wholeMarket = await CaptureWindowAsync(cancellationToken);
+        var wholeBounds = new Rectangle(0, 0, wholeMarket.Width, wholeMarket.Height);
+        var requestedMarket = marketRegion.ToPixels(wholeBounds);
+        requestedMarket.Intersect(wholeBounds);
+        var configuredChat = settings.ChatRegion.ToPixels(wholeBounds);
+        var offsetX = requestedMarket.Left - configuredChat.Left;
+        var offsetY = requestedMarket.Top - configuredChat.Top;
+        using var bitmap = wholeMarket.Clone(requestedMarket, PixelFormat.Format32bppArgb);
         var regions = BlueLinkLocator.FindRegions(bitmap,
             new PixelRect(0, 0, bitmap.Width, bitmap.Height));
         if (regions.Count == 0)
@@ -662,7 +679,11 @@ public sealed class QqDesktopClient
                 {
                     var shifted = word with
                     {
-                        Bounds = word.Bounds with { Y = word.Bounds.Y + rowTop }
+                        Bounds = word.Bounds with
+                        {
+                            X = word.Bounds.X + offsetX,
+                            Y = word.Bounds.Y + rowTop + offsetY
+                        }
                     };
                     return (Word: shifted, Name: resolver.Resolve(word.Text));
                 })
