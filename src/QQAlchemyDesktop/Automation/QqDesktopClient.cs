@@ -897,7 +897,8 @@ public sealed class QqDesktopClient
             var windowBounds = nativeRect.ToRectangle();
             var chat = settings.ChatRegion.ToPixels(windowBounds);
             var input = settings.InputRegion.ToPixels(windowBounds);
-            var point = new Point(chat.Left + listing.ClickRect.Center.X, chat.Top + listing.ClickRect.Center.Y);
+            var point = new Point(chat.Left + listing.ClickRect.Center.X,
+                chat.Top + listing.ClickRect.Center.Y + Math.Max(2, listing.ClickRect.Height / 3));
 
             await _store.AuditAsync("info", "market_click_attempt",
                 $"{listing.HerbName} rect={listing.ClickRect} screen={point.X},{point.Y} " +
