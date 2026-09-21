@@ -580,6 +580,143 @@ public sealed class QqDesktopClient
             allowLiveRefresh: true);
     }
 
+    /// <summary>
+    /// Reads a market card with a small-text fallback.  The herb name is the
+    /// source of truth: once OCR resolves it against the configured purchase
+    /// rules, its OCR rectangle is safe to click.  Blue pixels are used only
+    /// to split the dense card into likely text rows; they are not required
+    /// for a successful match.
+    /// </summary>
+    public async Task<OcrObservation> ObserveMarketAsync(IEnumerable<string> knownHerbNames,
+        CancellationToken cancellationToken = default)
+    {
+        var settings = await RequireVerifiedCalibrationAsync(cancellationToken);
+        var baseObservation = await ObserveRegionTwiceAsync(settings.ChatRegion, cancellationToken,
+            allowLiveRefresh: true);
+        var resolver = new HerbNameResolver(knownHerbNames);
+        var baseResolved = baseObservation.Words
+            .Select(word => (Word: word, Name: resolver.Resolve(word.Text)))
+            .Where(x => x.Name is not null)
+            .Select(x => (x.Word, Name: x.Name!))
+            .ToArray();
+
+        using var bitmap = await CaptureRegionAsync(settings.ChatRegion, cancellationToken);
+        var regions = BlueLinkLocator.FindRegions(bitmap,
+            new PixelRect(0, 0, bitmap.Width, bitmap.Height));
+        if (regions.Count == 0)
+        {
+            await RecordOcrAuditAsync("warn", "market_text_regions_empty",
+                "坊市卡片未找到颜色提示区域，继续使用整块 OCR 名称和坐标");
+            return baseObservation;
+        }
+
+        var resolved = new List<(string Name, PixelRect Bounds, double? Price)>();
+        var usedNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var region in regions)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var rowTop = Math.Max(0, region.Y - 8);
+            var rowBottom = Math.Min(bitmap.Height, region.Y + region.Height + 8);
+            var rowHeight = Math.Max(1, rowBottom - rowTop);
+            using var row = bitmap.Clone(new Rectangle(0, rowTop, bitmap.Width, rowHeight),
+                PixelFormat.Format32bppArgb);
+            var rowObservation = await _ocr.RecognizeAsync(row, cancellationToken);
+            var candidate = rowObservation.Words
+                .Select(word =>
+                {
+                    var shifted = word with
+                    {
+                        Bounds = word.Bounds with { Y = word.Bounds.Y + rowTop }
+                    };
+                    return (Word: shifted, Name: resolver.Resolve(word.Text));
+                })
+                .Where(x => x.Name is not null)
+                .Select(x => (x.Word, Name: x.Name!))
+                .Where(x => !usedNames.Contains(x.Name))
+                .OrderByDescending(x => x.Word.Confidence)
+                .FirstOrDefault();
+            if (candidate.Name is null) continue;
+
+            var price = ParseMarketPrice(rowObservation.RawText);
+            if (price is null)
+            {
+                var nameCrop = bitmap.Clone(new Rectangle(
+                    Math.Max(0, region.X - 6), rowTop,
+                    Math.Min(bitmap.Width - Math.Max(0, region.X - 6), region.Width + 12), rowHeight),
+                    PixelFormat.Format32bppArgb);
+                try
+                {
+                    var nameObservation = await _ocr.RecognizeAsync(nameCrop, cancellationToken);
+                    price = ParseMarketPrice(nameObservation.RawText);
+                }
+                finally
+                {
+                    nameCrop.Dispose();
+                }
+            }
+
+            usedNames.Add(candidate.Name);
+            resolved.Add((candidate.Name, candidate.Word.Bounds, price));
+        }
+
+        if (resolved.Count == 0)
+        {
+            // The fallback is deliberately non-fatal.  A later OCR pass may
+            // still recognize a normal black-text market card.
+            return baseObservation;
+        }
+
+        var accessiblePrices = ParseAccessibleMarketPrices(GetAccessibleTexts());
+        var words = new List<OcrWordData>();
+        foreach (var item in resolved.Select((value, index) => (value, index)))
+        {
+            double? price = item.value.Price;
+            if (price is null && item.index < accessiblePrices.Count)
+                price = accessiblePrices[item.index];
+            if (price is null) continue;
+            words.Add(new OcrWordData(item.value.Name, item.value.Bounds, 0.9d));
+            // MarketParser groups by Y, so the synthetic price only needs to
+            // share the herb's row.  It is intentionally independent of any
+            // color/link assumption.
+            words.Add(new OcrWordData($"价格:{price.Value:0.####}万",
+                new PixelRect(Math.Max(0, item.value.Bounds.X - 80), item.value.Bounds.Y, 70,
+                    item.value.Bounds.Height), 0.99d));
+        }
+
+        if (words.Count == 0) return baseObservation;
+        var raw = string.Join('\n', words.OrderBy(x => x.Bounds.Y).ThenBy(x => x.Bounds.X)
+            .GroupBy(x => x.Bounds.Y)
+            .Select(group => string.Concat(group.OrderBy(x => x.Bounds.X).Select(x => x.Text))));
+        return new OcrObservation(raw, words, baseObservation.FrameHash, baseObservation.CapturedAt);
+    }
+
+    private static double? ParseMarketPrice(string text)
+    {
+        var match = Regex.Match(text, @"(?<price>\d+(?:\.\d+)?)\s*(?<unit>万|亿)",
+            RegexOptions.CultureInvariant);
+        if (!match.Success || !double.TryParse(match.Groups["price"].Value,
+                System.Globalization.NumberStyles.AllowDecimalPoint,
+                System.Globalization.CultureInfo.InvariantCulture, out var price)) return null;
+        return match.Groups["unit"].Value == "亿" ? price * 10_000d : price;
+    }
+
+    private static IReadOnlyList<double> ParseAccessibleMarketPrices(IReadOnlyList<string> accessible)
+    {
+        var marker = accessible.Select((text, index) => (text, index))
+            .Where(x => x.text.Contains("查看坊市药材", StringComparison.Ordinal) ||
+                        x.text.Contains("坊市查看", StringComparison.Ordinal))
+            .Select(x => x.index)
+            .DefaultIfEmpty(-1)
+            .Max();
+        var prices = new List<double>();
+        foreach (var text in accessible.Skip(marker + 1))
+        {
+            var price = ParseMarketPrice(text);
+            if (price is not null) prices.Add(price.Value);
+        }
+        return prices;
+    }
+
     public async Task<OcrObservation> ObserveRegionTwiceAsync(NormalizedRect region,
         CancellationToken cancellationToken = default, bool allowLiveRefresh = false)
     {

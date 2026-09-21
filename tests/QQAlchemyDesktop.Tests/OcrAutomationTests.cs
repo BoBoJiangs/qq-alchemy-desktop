@@ -25,6 +25,25 @@ public sealed class OcrAutomationTests
         Assert.InRange(bounds.Center.Y, 25, 60);
     }
 
+    [Fact]
+    public void BlueLinkLocator_FindsSeparateRowsForMultipleLinks()
+    {
+        using var bitmap = new Bitmap(260, 90);
+        using var graphics = Graphics.FromImage(bitmap);
+        using var font = new Font("Microsoft YaHei UI", 18, FontStyle.Regular, GraphicsUnit.Pixel);
+        using var blue = new SolidBrush(Color.FromArgb(0, 153, 255));
+        graphics.Clear(Color.White);
+        graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+        graphics.DrawString("九叶芝", font, blue, 40, 8);
+        graphics.DrawString("五柳根", font, blue, 40, 45);
+
+        var regions = BlueLinkLocator.FindRegions(bitmap, new PixelRect(0, 0, 260, 90));
+
+        Assert.Equal(2, regions.Count);
+        Assert.True(regions[0].Y < regions[1].Y);
+        Assert.All(regions, region => Assert.True(region.Width >= 6 && region.Height >= 5));
+    }
+
     [Theory]
     [InlineData("@小小 坊市购买22906fc8-99c2-4356-a466-4c17e3d8dcb5")]
     [InlineData("小小\n坊市购买 22906FC8-99C2-4356-A466-4C17E3D8DCB5")]

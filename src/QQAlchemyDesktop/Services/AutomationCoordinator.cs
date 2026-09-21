@@ -264,7 +264,12 @@ public sealed class AutomationCoordinator : BackgroundService
                 }
                 case AutomationState.ScanningMarket:
                 {
-                    OcrResponseGate.TryExtractLatest(observation, 30, out var marketResponse);
+                    var purchaseRules = await _store.GetSettingAsync<List<PurchaseRule>>("purchaseRules",
+                        cancellationToken) ?? [];
+                    var marketObservation = await _qq.ObserveMarketAsync(
+                        purchaseRules.Select(rule => rule.HerbName), cancellationToken);
+                    _checkpoint.LastOcrText = marketObservation.RawText;
+                    OcrResponseGate.TryExtractLatest(marketObservation, 30, out var marketResponse);
                     await HandleMarketLockedAsync(marketResponse, cancellationToken);
                     break;
                 }
