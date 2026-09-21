@@ -276,9 +276,28 @@ public sealed class AutomationCoordinator : BackgroundService
 
     private async Task HandleInventoryLockedAsync(OcrObservation observation, CancellationToken cancellationToken)
     {
-        if (!MessageClassifier.IsInventoryPage(observation.RawText)) return;
         if (_calculator.HerbNames.Count == 0) await _calculator.GenerateCatalogAsync(cancellationToken);
-        var entries = InventoryParser.Parse(observation.RawText, new HerbNameResolver(_calculator.HerbNames));
+        var resolver = new HerbNameResolver(_calculator.HerbNames);
+        var inventoryText = observation.RawText;
+        var entries = MessageClassifier.IsInventoryPage(inventoryText)
+            ? InventoryParser.Parse(inventoryText, resolver)
+            : Array.Empty<InventoryEntry>();
+        if (entries.Count == 0)
+        {
+            var accessibleText = string.Join("\n", _qq.GetAccessibleTexts());
+            if (MessageClassifier.IsInventoryPage(accessibleText))
+            {
+                var accessibleEntries = InventoryParser.Parse(accessibleText, resolver);
+                if (accessibleEntries.Count > 0)
+                {
+                    inventoryText = accessibleText;
+                    entries = accessibleEntries;
+                    await _store.AuditAsync("info", "inventory_uia_fallback",
+                        $"OCR 未解析到药材条目，改用 UIA 读取 {entries.Count} 条",
+                        cancellationToken: CancellationToken.None);
+                }
+            }
+        }
         if (entries.Count == 0) return;
         foreach (var entry in entries)
         {
@@ -293,7 +312,7 @@ public sealed class AutomationCoordinator : BackgroundService
         _deadline = null;
         _queryRetried = false;
 
-        var tail = observation.RawText.Length > 360 ? observation.RawText[^360..] : observation.RawText;
+        var tail = inventoryText.Length > 360 ? inventoryText[^360..] : inventoryText;
         if (MessageClassifier.HasNextPage(tail) && _checkpoint.CurrentPage < 20)
         {
             _checkpoint.CurrentPage++;

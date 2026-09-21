@@ -74,6 +74,12 @@ public sealed class QqDesktopClient
     }
 
     /// <summary>
+    /// Returns the currently exposed QQ text nodes without sending input.
+    /// This is a read-only fallback for blue link/card text that OCR may miss.
+    /// </summary>
+    public IReadOnlyList<string> GetAccessibleTexts() => GetDiagnostics().AccessibleTexts;
+
+    /// <summary>
     /// 在 QQ 的全局搜索框中输入群号，但不选择结果、不打开群聊，也不发送任何消息。
     /// 这是校准向导使用的只读探测步骤（输入的群号来自用户明确提供的配置）。
     /// </summary>

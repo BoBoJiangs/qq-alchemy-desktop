@@ -31,6 +31,21 @@ public sealed class CoreTests : IDisposable
     }
 
     [Fact]
+    public void InventoryParser_ParsesUiAVisibleCardLines()
+    {
+        var resolver = new HerbNameResolver(["冰灵果", "地心火芝"]);
+        var entries = InventoryParser.Parse("""
+            一心的药材背包
+            名字：冰灵果
+            拥有数量:4---炼金|坊市数据
+            名字：地心火芝
+            拥有数量:16---炼金|坊市数据
+            """, resolver).ToDictionary(x => x.HerbName, x => x.Count);
+        Assert.Equal(4, entries["冰灵果"]);
+        Assert.Equal(16, entries["地心火芝"]);
+    }
+
+    [Fact]
     public void HerbResolver_OnlyCorrectsUniqueSingleCharacterError()
     {
         var unique = new HerbNameResolver(["冰灵果", "地心火芝"]);
