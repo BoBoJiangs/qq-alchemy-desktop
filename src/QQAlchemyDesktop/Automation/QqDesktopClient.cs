@@ -1128,11 +1128,11 @@ public sealed class QqDesktopClient
         {
             using var app = FlaUI.Core.Application.Attach(process);
             using var automation = new UIA3Automation();
-            var window = app.GetMainWindow(automation, TimeSpan.FromSeconds(2));
-            if (window is null) return false;
+            var windows = app.GetAllTopLevelWindows(automation);
+            if (windows.Length == 0) return false;
             if (!TryLocateWindowBounds(out var nativeBounds)) return false;
             var inputBounds = settings.InputRegion.ToPixels(nativeBounds);
-            var all = window.FindAllDescendants()
+            var all = windows.SelectMany(window => window.FindAllDescendants())
                 .Where(element => element.ControlType != ControlType.Edit)
                 .Select(element => new MentionCandidate(element, GetAccessibleElementText(element),
                     element.BoundingRectangle))
