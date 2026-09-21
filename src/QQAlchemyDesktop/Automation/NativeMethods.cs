@@ -12,6 +12,7 @@ internal static class NativeMethods
     internal const uint MouseeventfMove = 0x0001;
     internal const uint MouseeventfLeftdown = 0x0002;
     internal const uint MouseeventfLeftup = 0x0004;
+    internal const uint MouseeventfWheel = 0x0800;
     internal const uint MouseeventfAbsolute = 0x8000;
     internal const ushort VkControl = 0x11;
     internal const ushort VkA = 0x41;

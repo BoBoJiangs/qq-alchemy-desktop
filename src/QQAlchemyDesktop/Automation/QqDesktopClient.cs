@@ -663,6 +663,8 @@ public sealed class QqDesktopClient
                 KeyPress(NativeMethods.VkReturn);
                 await _store.AuditAsync("warn", "send_via_enter", command, cancellationToken: cancellationToken);
             }
+            if (NativeMethods.GetWindowRect(hwnd, out var sentRect))
+                ScrollChatToBottom(settings.ChatRegion, sentRect.ToRectangle());
             await _store.AuditAsync("info", "qq_command_sent", command, Guid.NewGuid().ToString("N"), cancellationToken);
         }
         finally
@@ -741,6 +743,7 @@ public sealed class QqDesktopClient
                 ClearInput(input);
                 throw new InvalidOperationException("采购命令已生成并通过校验，但没有找到 QQ 的“发送”按钮，已清空并拒绝发送");
             }
+            ScrollChatToBottom(settings.ChatRegion, windowBounds);
             await _store.AuditAsync("info", "market_purchase_sent",
                 $"{listing.HerbName} {listing.PriceWan:0.####}万 page={listing.Page} command={command}",
                 listing.ListingToken, cancellationToken);
@@ -787,6 +790,37 @@ public sealed class QqDesktopClient
         Thread.Sleep(80);
         KeyChord(NativeMethods.VkControl, NativeMethods.VkA);
         KeyPress(NativeMethods.VkBack);
+    }
+
+    private static void ScrollChatToBottom(NormalizedRect chatRegion, Rectangle windowBounds)
+    {
+        var chat = chatRegion.ToPixels(windowBounds);
+        if (chat.Width <= 0 || chat.Height <= 0) return;
+        var x = chat.Left + chat.Width / 2;
+        var y = chat.Bottom - Math.Max(20, chat.Height / 12);
+        var width = Math.Max(1, NativeMethods.GetSystemMetrics(0) - 1);
+        var height = Math.Max(1, NativeMethods.GetSystemMetrics(1) - 1);
+        var dx = (int)Math.Round(x * 65535d / width);
+        var dy = (int)Math.Round(y * 65535d / height);
+        var inputs = Enumerable.Range(0, 6)
+            .Select(_ => new NativeMethods.Input
+            {
+                Type = NativeMethods.InputMouse,
+                Union = new NativeMethods.InputUnion
+                {
+                    Mouse = new NativeMethods.MouseInput
+                    {
+                        Dx = dx,
+                        Dy = dy,
+                        MouseData = unchecked((uint)-1200),
+                        Flags = NativeMethods.MouseeventfMove |
+                                NativeMethods.MouseeventfAbsolute |
+                                NativeMethods.MouseeventfWheel
+                    }
+                }
+            })
+            .ToArray();
+        EnsureInput(inputs);
     }
 
     public string SaveScreenshot(string prefix = "failure")
