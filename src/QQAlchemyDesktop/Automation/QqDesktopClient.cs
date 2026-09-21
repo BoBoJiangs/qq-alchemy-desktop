@@ -310,11 +310,20 @@ public sealed class QqDesktopClient
                                      p.ProcessName.Equals("QQNT", StringComparison.OrdinalIgnoreCase)))
             {
                 var handle = candidateProcess.MainWindowHandle;
-                if (handle == IntPtr.Zero || !NativeMethods.IsWindowVisible(handle) ||
-                    !NativeMethods.GetWindowRect(handle, out var rect)) continue;
+                if (handle == IntPtr.Zero || !NativeMethods.IsWindowVisible(handle)) continue;
+                // When the QQ main window is minimized, its restored bounds
+                // are reported as a tiny 160x28 title strip. Restore that
+                // stable main handle before measuring it; otherwise callers
+                // would persist invalid calibration regions.
+                if (NativeMethods.IsIconic(handle))
+                {
+                    NativeMethods.ShowWindow(handle, NativeMethods.SwRestore);
+                    Thread.Sleep(120);
+                }
+                if (!NativeMethods.GetWindowRect(handle, out var rect)) continue;
                 var width = Math.Max(0, rect.Right - rect.Left);
                 var height = Math.Max(0, rect.Bottom - rect.Top);
-                if (width > 0 && height > 0)
+                if (IsUsableWindowBounds(width, height))
                     candidates.Add((candidateProcess, handle, (long)width * height));
             }
         }
