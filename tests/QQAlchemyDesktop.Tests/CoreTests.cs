@@ -235,6 +235,22 @@ public sealed class CoreTests : IDisposable
     }
 
     [Fact]
+    public void InventoryFastOcr_RejectsIncompleteNormalPage()
+    {
+        var names = Enumerable.Range(1, 18).Select(index => $"药材{index}").ToArray();
+        var raw = "一心的药材背包\n" + string.Join('\n', names.Select(name =>
+            $"名字：{name} 拥有数量：1")) + "\n第1页/共5页";
+        var observation = new OcrObservation(raw, [], "frame", DateTimeOffset.Now);
+
+        Assert.True(QqDesktopClient.IsCompleteInventoryObservation(observation, 1, names));
+        Assert.False(QqDesktopClient.IsCompleteInventoryObservation(observation with
+        {
+            RawText = string.Join('\n', names.Take(17).Select(name =>
+                $"名字：{name} 拥有数量：1")) + "\n第1页/共5页"
+        }, 1, names));
+    }
+
+    [Fact]
     public async Task RecipeRules_KeepThresholdPingLeadProfitOrderAndCommandFormat()
     {
         var (calculator, store, paths) = await CreateCalculatorAsync();

@@ -713,15 +713,36 @@ public sealed class QqDesktopClient
     }
 
     /// <summary>
-    /// Performs one full-card OCR pass for an inventory page. Inventory
-    /// pagination is gated by the requested page number, so a second
-    /// consensus frame is only needed when this fast pass is inconclusive.
+    /// Performs a fast inventory OCR pass first. The 2x pass is accepted
+    /// only when it resolves a complete page; otherwise a 3x pass preserves
+    /// the old high-accuracy fallback for small herb names.
     /// </summary>
     public async Task<OcrObservation> ObserveInventoryPageAsync(
+        int expectedPage, IReadOnlyCollection<string> knownHerbNames,
         CancellationToken cancellationToken = default)
     {
         var settings = await RequireVerifiedCalibrationAsync(cancellationToken);
-        return await RecognizeRegionAsync(ExpandChatRegion(settings.ChatRegion), cancellationToken);
+        var region = ExpandChatRegion(settings.ChatRegion);
+        var fast = await RecognizeRegionAsync(region, cancellationToken, scaleFactor: 2);
+        if (IsCompleteInventoryObservation(fast, expectedPage, knownHerbNames)) return fast;
+        return await RecognizeRegionAsync(region, cancellationToken);
+    }
+
+    internal static bool IsCompleteInventoryObservation(OcrObservation observation,
+        int expectedPage, IReadOnlyCollection<string> knownHerbNames)
+    {
+        if (!HasInventoryPageFor(observation.RawText, expectedPage) || knownHerbNames.Count == 0)
+            return false;
+        var entries = InventoryParser.Parse(observation.RawText, new HerbNameResolver(knownHerbNames));
+        var pageMatch = Regex.Match(OcrConsensus.Normalize(observation.RawText),
+            @"第(?<current>\d+)页/共(?<total>\d+)页");
+        if (!pageMatch.Success || !int.TryParse(pageMatch.Groups["current"].Value, out var current) ||
+            !int.TryParse(pageMatch.Groups["total"].Value, out var total)) return false;
+        // Normal pages contain 20 entries and the last page contains the
+        // remainder. Requiring nearly all entries prevents a 2x pass that
+        // happened to recognize only a few rows from being accepted.
+        var minimumEntries = current < total ? 18 : 15;
+        return entries.Count >= minimumEntries;
     }
 
     /// <summary>
@@ -1749,10 +1770,10 @@ public sealed class QqDesktopClient
     }
 
     private async Task<OcrObservation> RecognizeRegionAsync(NormalizedRect region,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, int scaleFactor = 3)
     {
         using var bitmap = await CaptureRegionAsync(region, cancellationToken);
-        return await _ocr.RecognizeAsync(bitmap, cancellationToken);
+        return await _ocr.RecognizeAsync(bitmap, cancellationToken, scaleFactor);
     }
 
     private static IReadOnlyList<MentionOcrMatch> ExtractMentionMatches(

@@ -252,7 +252,10 @@ public sealed class AutomationCoordinator : BackgroundService
                 if (!inventoryUiAReady && DateTimeOffset.UtcNow < _nextInventoryOcrProbe)
                     return;
                 _nextInventoryOcrProbe = DateTimeOffset.UtcNow.AddMilliseconds(600);
-                observation = await _qq.ObserveInventoryPageAsync(cancellationToken);
+                if (_calculator.HerbNames.Count == 0)
+                    await _calculator.GenerateCatalogAsync(cancellationToken);
+                observation = await _qq.ObserveInventoryPageAsync(
+                    _checkpoint.CurrentPage, _calculator.HerbNames, cancellationToken);
                 inventoryOcrFastPath = true;
             }
             else if (_checkpoint.State == AutomationState.WaitingPurchaseResult &&

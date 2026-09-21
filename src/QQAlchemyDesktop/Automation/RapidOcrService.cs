@@ -11,7 +11,7 @@ public sealed class RapidOcrService
 {
     // QQ 卡片中的药材名通常只有 13–15px 高；3x 放大能让检测器
     // 保留蓝色小字笔画，同时仍由 BlueLinkLocator 修正点击框。
-    private const int ScaleFactor = 3;
+    private const int DefaultScaleFactor = 3;
     private readonly OcrLite _engine;
     private readonly Task _initialization;
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -30,11 +30,13 @@ public sealed class RapidOcrService
         _initialization = _engine.InitModels();
     }
 
-    public async Task<OcrObservation> RecognizeAsync(Bitmap bitmap, CancellationToken cancellationToken = default)
+    public async Task<OcrObservation> RecognizeAsync(Bitmap bitmap,
+        CancellationToken cancellationToken = default, int scaleFactor = DefaultScaleFactor)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var png = ToPng(bitmap);
         var hash = Convert.ToHexString(SHA256.HashData(png));
+        scaleFactor = Math.Clamp(scaleFactor, 1, DefaultScaleFactor);
         await _gate.WaitAsync(cancellationToken);
         try
         {
@@ -43,7 +45,7 @@ public sealed class RapidOcrService
             // 卡片里的蓝色文字（药材名链接、页码、拥有数量）会被 PP-OCR 漏读；
             // 逐像素取 min(r,g,b) 把彩色文字统一压成黑字白底后再识别。
             using var boosted = BoostColoredText(bitmap);
-            using var scaled = Scale(boosted, ScaleFactor);
+            using var scaled = Scale(boosted, scaleFactor);
             var result = await _engine.DetectAsync(scaled, padding: 0,
                 maxSideLen: Math.Max(scaled.Width, scaled.Height), boxScoreThresh: 0.38f,
                 boxThresh: 0.22f, unClipRatio: 1.6f, doAngle: false, mostAngle: false);
@@ -51,7 +53,7 @@ public sealed class RapidOcrService
             {
                 var words = result.TextBlocks
                     .Where(block => !string.IsNullOrWhiteSpace(block.Text) && block.BoxPoints.Count >= 4)
-                    .Select(block => ToWord(bitmap, block))
+                    .Select(block => ToWord(bitmap, block, scaleFactor))
                     .OrderBy(word => word.Bounds.Y)
                     .ThenBy(word => word.Bounds.X)
                     .ToArray();
@@ -68,12 +70,13 @@ public sealed class RapidOcrService
         }
     }
 
-    private static OcrWordData ToWord(Bitmap original, RapidOCRLib.Models.TextBlock block)
+    private static OcrWordData ToWord(Bitmap original, RapidOCRLib.Models.TextBlock block,
+        int scaleFactor)
     {
-        var minX = (int)Math.Floor(block.BoxPoints.Min(point => point.X) / (double)ScaleFactor);
-        var minY = (int)Math.Floor(block.BoxPoints.Min(point => point.Y) / (double)ScaleFactor);
-        var maxX = (int)Math.Ceiling(block.BoxPoints.Max(point => point.X) / (double)ScaleFactor);
-        var maxY = (int)Math.Ceiling(block.BoxPoints.Max(point => point.Y) / (double)ScaleFactor);
+        var minX = (int)Math.Floor(block.BoxPoints.Min(point => point.X) / (double)scaleFactor);
+        var minY = (int)Math.Floor(block.BoxPoints.Min(point => point.Y) / (double)scaleFactor);
+        var maxX = (int)Math.Ceiling(block.BoxPoints.Max(point => point.X) / (double)scaleFactor);
+        var maxY = (int)Math.Ceiling(block.BoxPoints.Max(point => point.Y) / (double)scaleFactor);
         var detected = new PixelRect(
             Math.Clamp(minX, 0, original.Width - 1),
             Math.Clamp(minY, 0, original.Height - 1),
