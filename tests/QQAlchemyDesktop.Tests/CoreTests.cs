@@ -147,6 +147,43 @@ public sealed class CoreTests : IDisposable
         Assert.True(PurchaseSelector.HasReachedTaskLimit(50, 50));
     }
 
+    [Fact]
+    public void PurchaseSelector_SelectAllKeepsPriorityAndRespectsPlannedInventory()
+    {
+        var listings = new[]
+        {
+            Listing("玄冰花", 70, "CHEAP"),
+            Listing("玄冰花", 80, "SECOND"),
+            Listing("乌灵参", 60, "OTHER")
+        };
+        var rules = new[]
+        {
+            new PurchaseRule("玄冰花", 100, 2, 0),
+            new PurchaseRule("乌灵参", 100, 30, 1)
+        };
+
+        var selected = PurchaseSelector.SelectAll(listings, rules,
+            new Dictionary<string, int> { ["玄冰花"] = 0 });
+
+        Assert.Equal(new[] { "OTHER", "CHEAP", "SECOND" }, selected.Select(x => x.ListingToken));
+    }
+
+    [Fact]
+    public void PurchaseSelector_SelectAllDoesNotQueueDuplicateBeyondLimit()
+    {
+        var listings = new[]
+        {
+            Listing("玄冰花", 70, "CHEAP"),
+            Listing("玄冰花", 80, "SECOND")
+        };
+        var rules = new[] { new PurchaseRule("玄冰花", 100, 1, 0) };
+
+        var selected = PurchaseSelector.SelectAll(listings, rules,
+            new Dictionary<string, int> { ["玄冰花"] = 0 });
+
+        Assert.Equal("CHEAP", Assert.Single(selected).ListingToken);
+    }
+
     [Theory]
     [InlineData(960, 764, true)]
     [InlineData(399, 764, false)]
