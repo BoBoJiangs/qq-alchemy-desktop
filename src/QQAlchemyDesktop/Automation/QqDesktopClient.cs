@@ -345,6 +345,27 @@ public sealed class QqDesktopClient
                 var page = ParsePageState(observation.RawText);
                 if (page is null)
                 {
+                    // QQNT exposes the rendered card text through UIA even
+                    // when the blue footer is too small/low-contrast for OCR.
+                    // Use that read-only view as a bounded fallback so a
+                    // healthy response does not fail calibration solely on a
+                    // missed "第N页/共M页" glyph.
+                    var diagnostics = GetDiagnostics();
+                    page = ParsePageStateFromAccessibleTexts(diagnostics.AccessibleTexts);
+                    if (page is not null && diagnostics.AccessibleTexts.Any(text =>
+                            text.Contains("药材背包", StringComparison.Ordinal)))
+                    {
+                        await _store.AuditAsync("info", "verify_page_uia_fallback",
+                            $"OCR 未识别页脚，改用 UIA 读取第{page.Value.Current}页/共{page.Value.Total}页",
+                            cancellationToken: CancellationToken.None);
+                    }
+                    else
+                    {
+                        page = null;
+                    }
+                }
+                if (page is null)
+                {
                     // 诊断：页脚“第N页/共M页”未被 OCR 识别（数字/文字误读），节流记录样本。
                     var missTail = observation.RawText.Length > 120 ? observation.RawText[^120..] : observation.RawText;
                     try
@@ -1243,6 +1264,20 @@ public sealed class QqDesktopClient
         var m = Regex.Match(compact, @"第(\d+)页/共(\d+)页");
         if (!m.Success) return null;
         return (int.Parse(m.Groups[1].Value), int.Parse(m.Groups[2].Value));
+    }
+
+    internal static (int Current, int Total)? ParsePageStateFromAccessibleTexts(
+        IReadOnlyList<string> accessibleTexts)
+    {
+        for (var i = accessibleTexts.Count - 1; i >= 0; i--)
+        {
+            var compact = accessibleTexts[i].Replace(" ", "", StringComparison.Ordinal);
+            var m = Regex.Match(compact, @"第(\d+)页/共(\d+)页");
+            if (m.Success && int.TryParse(m.Groups[1].Value, out var current) &&
+                int.TryParse(m.Groups[2].Value, out var total))
+                return (current, total);
+        }
+        return null;
     }
 
     private static void RestoreAndActivate(IntPtr hwnd)

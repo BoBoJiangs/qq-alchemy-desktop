@@ -106,6 +106,18 @@ public sealed class CoreTests : IDisposable
         Assert.Equal(expected, QqDesktopClient.IsUsableWindowBounds(width, height));
 
     [Fact]
+    public void QqCalibration_FallsBackToLastAccessiblePageMarker()
+    {
+        var page = QqDesktopClient.ParsePageStateFromAccessibleTexts([
+            "旧响应 第1页/共5页",
+            "当前响应 药材背包2",
+            "当前响应 第2页/共5页"
+        ]);
+        Assert.Equal((2, 5), page);
+        Assert.Null(QqDesktopClient.ParsePageStateFromAccessibleTexts(["没有页脚"]));
+    }
+
+    [Fact]
     public async Task RecipeRules_KeepThresholdPingLeadProfitOrderAndCommandFormat()
     {
         var (calculator, store, paths) = await CreateCalculatorAsync();
