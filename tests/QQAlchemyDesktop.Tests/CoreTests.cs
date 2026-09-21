@@ -66,6 +66,12 @@ public sealed class CoreTests : IDisposable
     }
 
     [Fact]
+    public void MessageClassifier_RecognizesCaptchaFromUiAText()
+    {
+        Assert.True(MessageClassifier.IsCaptcha("请点击图中第2个表情对应的按钮"));
+    }
+
+    [Fact]
     public void MarketParser_ConvertsYiToWanAndKeepsClickRect()
     {
         var observation = new OcrObservation("玄冰花 价格 1.2 亿", [

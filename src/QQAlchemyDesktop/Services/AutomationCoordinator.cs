@@ -20,6 +20,7 @@ public sealed class AutomationCoordinator : BackgroundService
     private string? _lastFrameHash;
     private string? _lastMessageHash;
     private DateTimeOffset? _deadline;
+    private DateTimeOffset _nextAccessibleProbe = DateTimeOffset.MinValue;
     private bool _queryRetried;
     private MarketListing? _pendingListing;
     private string? _lastQuery;
@@ -238,6 +239,21 @@ public sealed class AutomationCoordinator : BackgroundService
                 return;
             }
 
+            // QQ 的验证码卡片常把文字暴露给 UIA，但蓝色/小号 OCR 区域
+            // 可能完全漏掉它。定期读取一次 UIA 文本作为安全兜底，避免
+            // 在验证码页面继续发送查询或重试。
+            if (DateTimeOffset.UtcNow >= _nextAccessibleProbe)
+            {
+                _nextAccessibleProbe = DateTimeOffset.UtcNow.AddSeconds(2);
+                var accessibleText = string.Join("\n", _qq.GetAccessibleTexts());
+                if (MessageClassifier.IsCaptcha(accessibleText))
+                {
+                    await PauseLockedAsync(AutomationState.PausedCaptcha,
+                        "检测到验证码，请人工处理后恢复", cancellationToken);
+                    return;
+                }
+            }
+
             switch (_checkpoint.State)
             {
                 // 整屏高的回复卡片会把命令行顶出可视区：统一改用可视区最底部内容做响应门。
@@ -310,6 +326,7 @@ public sealed class AutomationCoordinator : BackgroundService
             _inventory[entry.HerbName] = entry.Count;
         }
         _deadline = null;
+        _nextAccessibleProbe = DateTimeOffset.MinValue;
         _queryRetried = false;
 
         var tail = inventoryText.Length > 360 ? inventoryText[^360..] : inventoryText;
