@@ -227,6 +227,7 @@ public sealed class AutomationCoordinator : BackgroundService
             }
 
             OcrObservation observation;
+            var purchaseUiAFastPath = false;
             if (_checkpoint.State == AutomationState.ScanningMarket)
             {
                 var purchaseRules = await _store.GetSettingAsync<List<PurchaseRule>>("purchaseRules",
@@ -243,15 +244,16 @@ public sealed class AutomationCoordinator : BackgroundService
                 observation = accessibleObservation;
             }
             else if (_checkpoint.State == AutomationState.WaitingPurchaseResult &&
-                     _lastQuery is not null &&
+                     _pendingListing is not null &&
                      _qq.TryObserveVisibleChat(out var purchaseAccessibleObservation) &&
-                     OcrResponseGate.TryExtractAfterCommand(purchaseAccessibleObservation, _lastQuery, out _))
+                     QqDesktopClient.HasPurchaseSuccessFor(purchaseAccessibleObservation.RawText,
+                         _pendingListing.HerbName))
             {
                 // A purchase response is exposed by QQ UIA before a stable
-                // OCR frame is available. Use it as the fast path, but only
-                // when the exact UUID command is visible so an older success
-                // message cannot be attributed to the current purchase.
+                // OCR frame is available. Require the pending herb name too,
+                // so an older success for another listing cannot be consumed.
                 observation = purchaseAccessibleObservation;
+                purchaseUiAFastPath = true;
             }
             else
             {
@@ -302,11 +304,13 @@ public sealed class AutomationCoordinator : BackgroundService
                 }
                 case AutomationState.WaitingPurchaseResult:
                 {
-                    var purchaseText = _lastQuery is not null &&
-                                       OcrResponseGate.TryExtractAfterCommand(observation, _lastQuery,
-                                           out var purchaseResponse)
-                        ? purchaseResponse.RawText
-                        : "";
+                    var purchaseText = purchaseUiAFastPath
+                        ? observation.RawText
+                        : _lastQuery is not null &&
+                          OcrResponseGate.TryExtractAfterCommand(observation, _lastQuery,
+                              out var purchaseResponse)
+                            ? purchaseResponse.RawText
+                            : "";
                     await HandlePurchaseResultLockedAsync(purchaseText, cancellationToken);
                     break;
                 }

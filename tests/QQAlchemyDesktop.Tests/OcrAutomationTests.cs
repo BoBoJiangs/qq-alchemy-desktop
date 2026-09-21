@@ -135,6 +135,8 @@ public sealed class OcrAutomationTests
         Assert.False(QqDesktopClient.HasUsefulChatMarker("普通聊天消息"));
         Assert.True(QqDesktopClient.HasInventoryPayload("药材背包 名字：九叶芝 拥有数量：2"));
         Assert.False(QqDesktopClient.HasInventoryPayload("药材背包"));
+        Assert.True(QqDesktopClient.HasPurchaseSuccessFor("道友成功购买九叶芝，消耗灵石320万", "九叶芝"));
+        Assert.False(QqDesktopClient.HasPurchaseSuccessFor("道友成功购买五柳根，消耗灵石320万", "九叶芝"));
     }
 
     [Fact]

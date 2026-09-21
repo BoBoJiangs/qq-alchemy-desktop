@@ -164,6 +164,10 @@ public sealed class QqDesktopClient
         (text.Contains("拥有数量", StringComparison.Ordinal) ||
          text.Contains("数量", StringComparison.Ordinal));
 
+    internal static bool HasPurchaseSuccessFor(string text, string herbName) =>
+        MessageClassifier.IsPurchaseSuccess(text) &&
+        text.Contains(herbName, StringComparison.Ordinal);
+
     /// <summary>
     /// Detect a captcha only when its UIA text node has a real on-screen
     /// rectangle in the QQ chat viewport. QQ keeps solved captcha messages in
