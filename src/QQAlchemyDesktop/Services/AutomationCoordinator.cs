@@ -134,14 +134,14 @@ public sealed class AutomationCoordinator : BackgroundService
                 throw new InvalidOperationException("当前状态不需要恢复");
             var task = _checkpoint.Task;
             if (task == TaskKind.None) throw new InvalidOperationException("没有可恢复的任务");
-            ResetRuntime();
-            _checkpoint.State = AutomationState.ReadingInventory;
-            _checkpoint.Step = "恢复前重新读取药材背包";
+            var resumeState = ResolveResumeState(_checkpoint.State, _checkpoint.ResumeState,
+                _pendingListing is not null, _marketQueue.Count > 0 || _marketCommands.Count > 0);
+            ResetTransientForResume();
+            _checkpoint.State = resumeState;
+            _checkpoint.ResumeState = null;
             _checkpoint.LastError = null;
-            _checkpoint.PendingActionId = null;
-            _checkpoint.CurrentPage = 1;
             await _store.SaveCheckpointAsync(_checkpoint, cancellationToken);
-            await SendQueryLockedAsync("药材背包", cancellationToken);
+            await ContinueAfterResumeLockedAsync(resumeState, cancellationToken);
         }
         finally
         {
@@ -308,7 +308,7 @@ public sealed class AutomationCoordinator : BackgroundService
 
             if (MessageClassifier.IsCaptcha(observation.RawText))
             {
-                await PauseLockedAsync(AutomationState.PausedCaptcha, "检测到验证码，请人工处理后恢复", cancellationToken);
+                await WaitForCaptchaClearLockedAsync(cancellationToken);
                 return;
             }
 
@@ -320,8 +320,7 @@ public sealed class AutomationCoordinator : BackgroundService
                 _nextAccessibleProbe = DateTimeOffset.UtcNow.AddSeconds(2);
                 if (_qq.HasVisibleCaptcha())
                 {
-                    await PauseLockedAsync(AutomationState.PausedCaptcha,
-                        "检测到验证码，请人工处理后恢复", cancellationToken);
+                    await WaitForCaptchaClearLockedAsync(cancellationToken);
                     return;
                 }
             }
@@ -604,6 +603,165 @@ public sealed class AutomationCoordinator : BackgroundService
         }
     }
 
+    private async Task WaitForCaptchaClearLockedAsync(CancellationToken cancellationToken)
+    {
+        var resumeState = _checkpoint.State;
+        _checkpoint.ResumeState = resumeState;
+        _checkpoint.LastError = "等待手动处理验证码";
+        _checkpoint.Step = "等待验证码处理（剩余 30 秒）";
+        await _store.SaveCheckpointAsync(_checkpoint, cancellationToken);
+        await _store.AuditAsync("warn", "captcha_wait_started",
+            "检测到验证码，等待人工处理，最多 30 秒", cancellationToken: cancellationToken);
+
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(30);
+        var lastRemaining = 30;
+        var clearSamples = 0;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!IsCaptchaStillVisible())
+            {
+                clearSamples++;
+                if (clearSamples >= 2)
+                {
+                    _checkpoint.State = resumeState;
+                    _checkpoint.ResumeState = null;
+                    _checkpoint.LastError = null;
+                    _checkpoint.Step = BuildResumeStep(resumeState);
+                    _lastFrameHash = null;
+                    _lastMessageHash = null;
+                    _deadline = DateTimeOffset.Now.AddSeconds(20);
+                    await _store.SaveCheckpointAsync(_checkpoint, cancellationToken);
+                    await _store.AuditAsync("info", "captcha_cleared",
+                        "验证码已处理，继续当前采购流程", cancellationToken: cancellationToken);
+                    return;
+                }
+            }
+            else
+            {
+                clearSamples = 0;
+            }
+
+            var remaining = Math.Max(0, (int)Math.Ceiling((deadline - DateTimeOffset.UtcNow).TotalSeconds));
+            if (remaining != lastRemaining)
+            {
+                lastRemaining = remaining;
+                _checkpoint.Step = $"等待验证码处理（剩余 {remaining} 秒）";
+                await _store.SaveCheckpointAsync(_checkpoint, cancellationToken);
+            }
+            await Task.Delay(300, cancellationToken);
+        }
+
+        await PauseLockedAsync(AutomationState.PausedCaptcha,
+            "验证码超过 30 秒未处理，请处理后恢复", cancellationToken);
+    }
+
+    private bool IsCaptchaStillVisible()
+    {
+        try
+        {
+            // The OCR/text snapshot may still contain an older captcha card
+            // after it has been clicked. Use the live UIA bounds as the
+            // clear signal so historical chat text cannot consume the full
+            // 30-second grace period.
+            return _qq.HasVisibleCaptcha();
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
+    private async Task ContinueAfterResumeLockedAsync(AutomationState resumeState,
+        CancellationToken cancellationToken)
+    {
+        switch (resumeState)
+        {
+            case AutomationState.WaitingPurchaseResult when _pendingListing is not null:
+            {
+                if (!_marketCommands.TryGetValue(_pendingListing.ListingToken, out var command))
+                {
+                    await PauseLockedAsync(AutomationState.PausedRecovery,
+                        $"无法恢复 {_pendingListing.HerbName} 的采购码，未自动重发", cancellationToken);
+                    return;
+                }
+                _lastQuery = command;
+                _checkpoint.PendingActionId = _pendingListing.ListingToken;
+                _checkpoint.Step = BuildResumeStep(resumeState);
+                _deadline = DateTimeOffset.Now.AddSeconds(20);
+                return;
+            }
+            case AutomationState.ScanningMarket:
+            {
+                if (_pendingListing is not null)
+                {
+                    _checkpoint.State = AutomationState.WaitingPurchaseResult;
+                    await ContinueAfterResumeLockedAsync(AutomationState.WaitingPurchaseResult,
+                        cancellationToken);
+                    return;
+                }
+
+                if (_marketQueue.Count > 0)
+                {
+                    var next = _marketQueue.Peek();
+                    if (_marketCommands.ContainsKey(next.ListingToken))
+                    {
+                        var settings = await _store.GetSettingAsync<AlchemySettings>("alchemy", cancellationToken)
+                            ?? new AlchemySettings();
+                        await SendNextMarketPurchaseLockedAsync(settings, cancellationToken);
+                        return;
+                    }
+                    _marketQueue.Clear();
+                    _marketCommands.Clear();
+                }
+
+                _checkpoint.Step = BuildResumeStep(resumeState);
+                _deadline = DateTimeOffset.Now.AddSeconds(20);
+                return;
+            }
+            case AutomationState.ReadingInventory:
+                _checkpoint.Step = BuildResumeStep(resumeState);
+                _deadline = DateTimeOffset.Now.AddSeconds(20);
+                if (string.IsNullOrWhiteSpace(_lastQuery) ||
+                    !_lastQuery.StartsWith("药材背包", StringComparison.Ordinal))
+                    _lastQuery = _checkpoint.CurrentPage > 1
+                        ? $"药材背包{_checkpoint.CurrentPage}"
+                        : "药材背包";
+                await SendQueryLockedAsync(_lastQuery, cancellationToken);
+                return;
+            case AutomationState.WaitingAlchemyResult:
+                _checkpoint.Step = BuildResumeStep(resumeState);
+                _deadline = DateTimeOffset.Now.AddSeconds(30);
+                return;
+            default:
+                _checkpoint.Step = BuildResumeStep(resumeState);
+                _deadline = DateTimeOffset.Now.AddSeconds(20);
+                return;
+        }
+    }
+
+    private string BuildResumeStep(AutomationState state) => state switch
+    {
+        AutomationState.WaitingPurchaseResult when _pendingListing is not null =>
+            $"继续等待购买结果：{_pendingListing.HerbName} {_pendingListing.PriceWan:0.####}万 " +
+            $"（本页剩余 {_marketQueue.Count}）",
+        AutomationState.ScanningMarket => $"继续扫描坊市药材第 {_checkpoint.CurrentPage} 页",
+        AutomationState.ReadingInventory => $"继续读取药材背包第 {_checkpoint.CurrentPage} 页",
+        AutomationState.WaitingAlchemyResult => "继续等待炼丹结果",
+        _ => "继续执行任务"
+    };
+
+    internal static AutomationState ResolveResumeState(AutomationState pausedState,
+        AutomationState? savedState, bool hasPendingPurchase, bool hasMarketWork)
+    {
+        if (savedState is { } state && state is not AutomationState.PausedCaptcha and
+            not AutomationState.PausedRecovery and not AutomationState.Faulted)
+            return state;
+        if (hasPendingPurchase) return AutomationState.WaitingPurchaseResult;
+        if (hasMarketWork) return AutomationState.ScanningMarket;
+        return AutomationState.ReadingInventory;
+    }
+
     private async Task SendNextMarketPurchaseLockedAsync(AlchemySettings settings,
         CancellationToken cancellationToken)
     {
@@ -738,6 +896,9 @@ public sealed class AutomationCoordinator : BackgroundService
 
     private async Task PauseLockedAsync(AutomationState state, string reason, CancellationToken cancellationToken)
     {
+        if (_checkpoint.State is not AutomationState.PausedCaptcha and
+            not AutomationState.PausedRecovery and not AutomationState.Faulted)
+            _checkpoint.ResumeState = _checkpoint.State;
         string? screenshot = null;
         try { screenshot = _qq.SaveScreenshot("paused"); } catch { /* window may be gone */ }
         _checkpoint.State = state;
@@ -754,6 +915,7 @@ public sealed class AutomationCoordinator : BackgroundService
     private async Task CompleteLockedAsync(string reason, CancellationToken cancellationToken)
     {
         _checkpoint.State = AutomationState.Completed;
+        _checkpoint.ResumeState = null;
         _checkpoint.Step = reason;
         _checkpoint.PendingActionId = null;
         _deadline = null;
@@ -817,6 +979,18 @@ public sealed class AutomationCoordinator : BackgroundService
         _marketQueue.Clear();
         _marketCommands.Clear();
         _alchemyQueue.Clear();
+    }
+
+    private void ResetTransientForResume()
+    {
+        _lastFrameHash = null;
+        _lastMessageHash = null;
+        _deadline = null;
+        _queryRetried = false;
+        _nextPurchaseResultOcrProbe = DateTimeOffset.MinValue;
+        _nextInventoryAccessibleProbe = DateTimeOffset.MinValue;
+        _nextInventoryOcrProbe = DateTimeOffset.MinValue;
+        _nextAccessibleProbe = DateTimeOffset.MinValue;
     }
 
 }

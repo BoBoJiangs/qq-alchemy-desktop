@@ -110,6 +110,7 @@ public sealed record InventoryEntry(string HerbName, int Count);
 public sealed class AutomationCheckpoint
 {
     public AutomationState State { get; set; } = AutomationState.Idle;
+    public AutomationState? ResumeState { get; set; }
     public TaskKind Task { get; set; } = TaskKind.None;
     public string Step { get; set; } = "待机";
     public string? LastError { get; set; }

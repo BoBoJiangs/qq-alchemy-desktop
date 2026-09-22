@@ -216,6 +216,24 @@ public sealed class CoreTests : IDisposable
     }
 
     [Theory]
+    [InlineData(AutomationState.WaitingPurchaseResult, AutomationState.WaitingPurchaseResult, false, false)]
+    [InlineData(AutomationState.ScanningMarket, AutomationState.ScanningMarket, false, true)]
+    [InlineData(AutomationState.PausedCaptcha, null, true, true)]
+    [InlineData(AutomationState.PausedRecovery, null, false, true)]
+    [InlineData(AutomationState.Faulted, null, false, false)]
+    public void AutomationCoordinator_ResumesExistingFlowWithoutRestartingInventory(
+        AutomationState pausedState, AutomationState? savedState,
+        bool hasPendingPurchase, bool hasMarketWork)
+    {
+        var actual = AutomationCoordinator.ResolveResumeState(
+            pausedState, savedState, hasPendingPurchase, hasMarketWork);
+        var expected = savedState ?? (hasPendingPurchase
+            ? AutomationState.WaitingPurchaseResult
+            : hasMarketWork ? AutomationState.ScanningMarket : AutomationState.ReadingInventory);
+        Assert.Equal(expected, actual);
+    }
+
+    [Theory]
     [InlineData(960, 764, true)]
     [InlineData(399, 764, false)]
     [InlineData(960, 299, false)]
