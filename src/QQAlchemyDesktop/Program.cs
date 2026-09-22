@@ -65,6 +65,26 @@ internal static class Program
     {
         app.MapGet("/api/status", (AutomationCoordinator coordinator) => coordinator.GetStatus());
         app.MapGet("/api/diagnostics/qq", (QqDesktopClient qq) => qq.GetDiagnostics());
+        app.MapGet("/api/diagnostics/qq-visible", (QqDesktopClient qq) =>
+        {
+            var visible = qq.GetVisibleAccessibleTexts()
+                .Select(item => new
+                {
+                    text = item.Text,
+                    left = item.Bounds.Left,
+                    top = item.Bounds.Top,
+                    width = item.Bounds.Width,
+                    height = item.Bounds.Height
+                })
+                .ToArray();
+            var page = qq.TryObserveAccessibleInventoryPage(1, out var observation);
+            return Results.Ok(new
+            {
+                visible,
+                inventoryPage1 = page,
+                inventoryText = page ? observation.RawText : ""
+            });
+        });
         app.MapPost("/api/diagnostics/screenshot", (QqDesktopClient qq) =>
             Results.Ok(new { path = qq.SaveScreenshot("qq-diagnostics") }));
         app.MapPost("/api/diagnostics/search-group", async (GroupLookupRequest request,
