@@ -16,6 +16,8 @@ public sealed class WebHostAssetTests
         Assert.Contains("/api/settings/alchemy", File.ReadAllText(scriptPath), StringComparison.Ordinal);
         Assert.Contains("/api/herbs/catalog", File.ReadAllText(scriptPath), StringComparison.Ordinal);
         Assert.Contains("purchaseRulesTable", index, StringComparison.Ordinal);
+        Assert.Contains("rules-table-wrap", File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "wwwroot", "styles.css")), StringComparison.Ordinal);
+        Assert.Contains("height:560px", File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "wwwroot", "styles.css")), StringComparison.Ordinal);
         Assert.Contains("allowUnmentionedCommands", File.ReadAllText(scriptPath), StringComparison.Ordinal);
     }
 }
