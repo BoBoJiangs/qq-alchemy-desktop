@@ -1122,14 +1122,30 @@ public sealed class QqDesktopClient
         CancellationToken cancellationToken = default)
     {
         var settings = await RequireVerifiedCalibrationAsync(cancellationToken);
-        var recentChat = ExpandChatRegion(settings.ChatRegion);
+        return await RecognizeRegionAsync(GetRecentChatResultRegion(settings.ChatRegion), cancellationToken);
+    }
+
+    /// <summary>
+    /// Reads only the recent bottom portion of the chat once.  Alchemy
+    /// confirmations are appended there, so the coordinator can validate
+    /// the current command without waiting for a full-chat OCR consensus.
+    /// </summary>
+    public async Task<OcrObservation> ObserveAlchemyResultAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var settings = await RequireVerifiedCalibrationAsync(cancellationToken);
+        return await RecognizeRegionAsync(GetRecentChatResultRegion(settings.ChatRegion), cancellationToken);
+    }
+
+    internal static NormalizedRect GetRecentChatResultRegion(NormalizedRect chatRegion)
+    {
+        var recentChat = ExpandChatRegion(chatRegion);
         const double recentHeightRatio = 0.48;
-        var recentRegion = new NormalizedRect(
+        return new NormalizedRect(
             recentChat.X,
             recentChat.Y + recentChat.Height * (1 - recentHeightRatio),
             recentChat.Width,
             recentChat.Height * recentHeightRatio);
-        return await RecognizeRegionAsync(recentRegion, cancellationToken);
     }
 
     private static NormalizedRect ExpandChatRegion(NormalizedRect region)

@@ -44,6 +44,18 @@ public sealed class OcrAutomationTests
         Assert.All(regions, region => Assert.True(region.Width >= 6 && region.Height >= 5));
     }
 
+    [Fact]
+    public void QqDesktopClient_RecentChatResultRegionKeepsBottomOfExpandedChat()
+    {
+        var region = QqDesktopClient.GetRecentChatResultRegion(
+            new NormalizedRect(0.20, 0.10, 0.60, 0.80));
+
+        Assert.Equal(0.02, region.X, precision: 10);
+        Assert.Equal(0.516, region.Y, precision: 10);
+        Assert.Equal(0.78, region.Width, precision: 10);
+        Assert.Equal(0.384, region.Height, precision: 10);
+    }
+
     [Theory]
     [InlineData("@小小 坊市购买22906fc8-99c2-4356-a466-4c17e3d8dcb5")]
     [InlineData("小小\n坊市购买 22906FC8-99C2-4356-A466-4C17E3D8DCB5")]

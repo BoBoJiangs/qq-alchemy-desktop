@@ -308,8 +308,8 @@ public sealed class AutomationCoordinator : BackgroundService
                      DateTimeOffset.UtcNow >= _nextAlchemyResultOcrProbe)
             {
                 // UIA 尚未暴露回执时才做 OCR，并限制频率，避免重复识别同一帧。
-                _nextAlchemyResultOcrProbe = DateTimeOffset.UtcNow.AddMilliseconds(700);
-                observation = await _qq.ObserveChatAsync(cancellationToken);
+                _nextAlchemyResultOcrProbe = DateTimeOffset.UtcNow.AddMilliseconds(350);
+                observation = await _qq.ObserveAlchemyResultAsync(cancellationToken);
             }
             else if (_checkpoint.State == AutomationState.WaitingAlchemyResult)
             {
