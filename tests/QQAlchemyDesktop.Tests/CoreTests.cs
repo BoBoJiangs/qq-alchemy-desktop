@@ -82,6 +82,19 @@ public sealed class CoreTests : IDisposable
     }
 
     [Fact]
+    public void CaptchaGuard_RecognizesResultBelowSolvedCaptchaCard()
+    {
+        var nodes = new (string Text, Rectangle Bounds)[]
+        {
+            ("请点击图中第2个表情对应的按钮", new Rectangle(120, 400, 180, 24)),
+            ("道友成功购买冰精芝，消耗灵石3800000枚", new Rectangle(120, 680, 260, 24)),
+            ("奖励8869灵石", new Rectangle(120, 720, 180, 24))
+        };
+        Assert.True(QqDesktopClient.IsCaptchaResolvedByFollowingText(nodes));
+        Assert.False(QqDesktopClient.IsCaptchaResolvedByFollowingText(nodes[..1]));
+    }
+
+    [Fact]
     public void MentionDeduplication_RecognizesNestedPopupText()
     {
         Assert.True(QqDesktopClient.IsNestedMentionRectangle(

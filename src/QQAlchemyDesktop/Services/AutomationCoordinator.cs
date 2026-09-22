@@ -664,7 +664,11 @@ public sealed class AutomationCoordinator : BackgroundService
             // after it has been clicked. Use the live UIA bounds as the
             // clear signal so historical chat text cannot consume the full
             // 30-second grace period.
-            return _qq.HasVisibleCaptcha();
+            if (!_qq.HasVisibleCaptcha()) return false;
+            // The solved card remains in QQ history. If a purchase result or
+            // reward is rendered below it, the manual click has succeeded and
+            // the current queue may resume without reopening the inventory.
+            return !_qq.HasCaptchaResolution();
         }
         catch
         {

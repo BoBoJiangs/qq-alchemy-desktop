@@ -445,6 +445,38 @@ public sealed class QqDesktopClient
         }
     }
 
+    /// <summary>
+    /// QQ leaves a solved captcha card in the chat history. A following bot
+    /// result/reward message is the reliable signal that the user's click was
+    /// accepted, even though the original captcha text remains visible.
+    /// </summary>
+    public bool HasCaptchaResolution()
+    {
+        try
+        {
+            return IsCaptchaResolvedByFollowingText(GetVisibleAccessibleTexts());
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    internal static bool IsCaptchaResolvedByFollowingText(
+        IReadOnlyList<(string Text, Rectangle Bounds)> nodes)
+    {
+        var captchaBottom = nodes
+            .Where(node => MessageClassifier.IsCaptcha(node.Text))
+            .Select(node => node.Bounds.Bottom)
+            .DefaultIfEmpty(-1)
+            .Max();
+        if (captchaBottom < 0) return false;
+
+        return nodes.Any(node => node.Bounds.Top > captchaBottom &&
+            (MessageClassifier.IsPurchaseSuccess(node.Text) ||
+             node.Text.Contains("奖励", StringComparison.Ordinal)));
+    }
+
     internal static bool IsVisibleCaptchaBounds(Rectangle textBounds, Rectangle chatViewport) =>
         textBounds.Width >= 20 && textBounds.Height >= 8 && chatViewport.IntersectsWith(textBounds);
 
