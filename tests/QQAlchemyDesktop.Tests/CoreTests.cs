@@ -316,6 +316,15 @@ public sealed class CoreTests : IDisposable
     }
 
     [Fact]
+    public void QqCalibration_InventoryViewportIncludesLeftAlignedFooter()
+    {
+        var viewport = QqDesktopClient.GetInventoryCardViewport(new Rectangle(0, 0, 776, 1040));
+
+        Assert.True(viewport.Left <= 75);
+        Assert.True(viewport.Contains(75, 850));
+    }
+
+    [Fact]
     public void InventoryFastOcr_RejectsIncompleteNormalPage()
     {
         var names = Enumerable.Range(1, 18).Select(index => $"药材{index}").ToArray();

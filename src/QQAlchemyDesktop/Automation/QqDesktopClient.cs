@@ -258,6 +258,12 @@ public sealed class QqDesktopClient
         windowBounds.Left + (int)(windowBounds.Width * 0.80),
         windowBounds.Top + (int)(windowBounds.Height * 0.90));
 
+    internal static Rectangle GetInventoryCardViewport(Rectangle windowBounds) => Rectangle.FromLTRB(
+        windowBounds.Left + (int)(windowBounds.Width * 0.05),
+        windowBounds.Top + (int)(windowBounds.Height * 0.10),
+        windowBounds.Left + (int)(windowBounds.Width * 0.82),
+        windowBounds.Top + (int)(windowBounds.Height * 0.90));
+
     private static bool TryGetWindowBounds(out Rectangle bounds)
     {
         bounds = Rectangle.Empty;
@@ -291,7 +297,11 @@ public sealed class QqDesktopClient
         if (expectedPage <= 0) return false;
         var nodes = GetAccessibleTextNodes(visibleOnly: false);
         if (nodes.Count == 0 || !TryGetWindowBounds(out var windowBounds)) return false;
-        var chatViewport = GetChatViewport(windowBounds);
+        // Inventory cards in QQNT are rendered farther left than the generic
+        // chat viewport (the footer may start around 8% of the window width).
+        // Keep the generic viewport for UIA root selection, but widen only
+        // this page-marker check so the footer is not filtered out.
+        var chatViewport = GetInventoryCardViewport(windowBounds);
         var pageMarker = nodes
             .Where(node => ParsePageMarker(node.Text) is { Current: var current } &&
                            current == expectedPage && chatViewport.IntersectsWith(node.Bounds))
