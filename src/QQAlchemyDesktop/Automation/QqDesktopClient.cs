@@ -348,7 +348,7 @@ public sealed class QqDesktopClient
                 node.Bounds.Width, node.Bounds.Height))
             .ToArray();
         var raw = string.Join('\n', card.Select(node => node.Text));
-        if (!IsCompleteInventoryText(raw, expectedPage, knownHerbNames)) return false;
+        if (!IsUsableAccessibleInventoryText(raw, expectedPage, knownHerbNames)) return false;
 
         var words = card.Select(node => new OcrWordData(node.Text,
             new PixelRect(node.Bounds.Left, node.Bounds.Top,
@@ -1086,6 +1086,28 @@ public sealed class QqDesktopClient
         // Requiring equality avoids accepting a clipped/partial card while
         // still supporting a shorter final page.
         return quantityCount >= 10 && entries.Count == quantityCount;
+    }
+
+    internal static bool IsUsableAccessibleInventoryText(string rawText, int expectedPage,
+        IReadOnlyCollection<string> knownHerbNames)
+    {
+        if (!HasInventoryPageFor(rawText, expectedPage) || knownHerbNames.Count == 0)
+            return false;
+        var entries = InventoryParser.Parse(rawText, new HerbNameResolver(knownHerbNames));
+        if (entries.Count == 0) return false;
+
+        var pageMatch = Regex.Match(OcrConsensus.Normalize(rawText),
+            @"第(?<current>\d+)页/共(?<total>\d+)页");
+        if (!pageMatch.Success || !int.TryParse(pageMatch.Groups["current"].Value, out var current) ||
+            !int.TryParse(pageMatch.Groups["total"].Value, out var total)) return false;
+
+        // QQNT may omit quantity nodes for some rows in its accessibility
+        // tree, while still exposing the herb names.  The card is safe to
+        // use when almost all expected name rows are present; known herbs
+        // with a visible quantity are then retained by InventoryParser.
+        var nameCount = Regex.Matches(rawText, @"名字\s*[:：]").Count;
+        var minimumNames = current < total ? 18 : 10;
+        return nameCount >= minimumNames;
     }
 
     /// <summary>

@@ -342,6 +342,17 @@ public sealed class CoreTests : IDisposable
     }
 
     [Fact]
+    public void InventoryUiA_AllowsMissingQuantityNodesButKeepsKnownRows()
+    {
+        var names = Enumerable.Range(1, 18).Select(index => $"药材{index}").ToArray();
+        var raw = "一心的药材背包\n" + string.Join('\n', names.Select((name, index) =>
+            index % 4 == 0 ? $"名字：{name}\n拥有数量:{index + 1}---" : $"名字：{name}")) +
+            "\n第1页/共5页";
+
+        Assert.True(QqDesktopClient.IsUsableAccessibleInventoryText(raw, 1, names));
+    }
+
+    [Fact]
     public void InventoryFastOcr_RejectsIncompleteNormalPage()
     {
         var names = Enumerable.Range(1, 18).Select(index => $"药材{index}").ToArray();
