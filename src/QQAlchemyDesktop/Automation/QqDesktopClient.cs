@@ -1152,6 +1152,34 @@ public sealed class QqDesktopClient
     internal static NormalizedRect GetCaptchaPreviewRegion(NormalizedRect chatRegion) =>
         ExpandChatRegion(chatRegion);
 
+    internal static Rectangle GetCaptchaImageCrop(Rectangle promptBounds, Rectangle windowBounds,
+        int captureWidth, int captureHeight)
+    {
+        if (promptBounds.Width <= 0 || promptBounds.Height <= 0 ||
+            windowBounds.Width <= 0 || windowBounds.Height <= 0 ||
+            captureWidth <= 0 || captureHeight <= 0)
+            throw new ArgumentOutOfRangeException(nameof(promptBounds), "验证码截图区域无效");
+
+        var scaleX = captureWidth / (double)windowBounds.Width;
+        var scaleY = captureHeight / (double)windowBounds.Height;
+        var prompt = new Rectangle(
+            (int)Math.Round((promptBounds.Left - windowBounds.Left) * scaleX),
+            (int)Math.Round((promptBounds.Top - windowBounds.Top) * scaleY),
+            Math.Max(1, (int)Math.Round(promptBounds.Width * scaleX)),
+            Math.Max(1, (int)Math.Round(promptBounds.Height * scaleY)));
+
+        // QQ renders this captcha as a wide strip. The prompt width gives a
+        // stable anchor while the aspect ratio keeps buttons/text below it
+        // out of the preview.
+        var maxWidth = Math.Min(460, captureWidth);
+        var width = Math.Min(maxWidth, Math.Max(40, (int)Math.Round(prompt.Width * 1.75)));
+        var height = Math.Clamp((int)Math.Round(width / 7d), 30, 120);
+        var x = Math.Clamp(prompt.Left, 0, captureWidth - width);
+        var y = prompt.Top - height - Math.Max(4, (int)Math.Round(6 * scaleY));
+        y = Math.Clamp(y, 0, captureHeight - height);
+        return new Rectangle(x, y, width, height);
+    }
+
     private static NormalizedRect ExpandChatRegion(NormalizedRect region)
     {
         const double leftPadding = 0.18;
@@ -1895,20 +1923,44 @@ public sealed class QqDesktopClient
     }
 
     /// <summary>
-    /// Captures the configured chat viewport for a captcha preview. This is
+    /// Captures the captcha image shown above the captcha prompt. This is
     /// intentionally local-only: it does not upload or recognize the image.
+    /// Falls back to the configured chat viewport when QQ does not expose the
+    /// captcha prompt bounds through UIA.
     /// </summary>
     public string SaveCaptchaPreview(string prefix = "captcha")
     {
         var settings = _store.GetSettingAsync<CalibrationSettings>("calibration")
             .GetAwaiter().GetResult();
-        using var bitmap = settings?.IsVerified == true
-            ? CaptureRegionAsync(GetCaptchaPreviewRegion(settings.ChatRegion), CancellationToken.None)
-                .GetAwaiter().GetResult()
-            : CaptureWindowAsync().GetAwaiter().GetResult();
-        var path = Path.Combine(_paths.Screenshots, $"{prefix}-{DateTime.Now:yyyyMMdd-HHmmssfff}.png");
-        bitmap.Save(path, ImageFormat.Png);
-        return path;
+        using var whole = CaptureWindowAsync().GetAwaiter().GetResult();
+        Bitmap bitmap;
+        var visibleCaptcha = GetVisibleAccessibleTexts()
+            .Where(item => MessageClassifier.IsCaptcha(item.Text))
+            .OrderByDescending(item => item.Bounds.Bottom)
+            .FirstOrDefault();
+        if (visibleCaptcha.Text.Length > 0 && TryLocateWindow(out _, out var hwnd) &&
+            NativeMethods.GetWindowRect(hwnd, out var windowRect))
+        {
+            var crop = GetCaptchaImageCrop(visibleCaptcha.Bounds, windowRect.ToRectangle(),
+                whole.Width, whole.Height);
+            bitmap = whole.Clone(crop, PixelFormat.Format32bppArgb);
+        }
+        else if (settings?.IsVerified == true)
+        {
+            bitmap = CaptureRegionAsync(GetCaptchaPreviewRegion(settings.ChatRegion), CancellationToken.None)
+                .GetAwaiter().GetResult();
+        }
+        else
+        {
+            bitmap = new Bitmap(whole);
+        }
+
+        using (bitmap)
+        {
+            var path = Path.Combine(_paths.Screenshots, $"{prefix}-{DateTime.Now:yyyyMMdd-HHmmssfff}.png");
+            bitmap.Save(path, ImageFormat.Png);
+            return path;
+        }
     }
 
     private async Task<Bitmap> CaptureRegionAsync(NormalizedRect region, CancellationToken cancellationToken)

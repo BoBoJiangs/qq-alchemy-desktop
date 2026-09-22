@@ -115,6 +115,20 @@ public sealed class CoreTests : IDisposable
     }
 
     [Fact]
+    public void CaptchaPreview_CropsWideImageAbovePrompt()
+    {
+        var crop = QqDesktopClient.GetCaptchaImageCrop(
+            new Rectangle(54, 560, 180, 18),
+            new Rectangle(0, 0, 776, 1040),
+            776, 1040);
+
+        Assert.Equal(54, crop.X);
+        Assert.InRange(crop.Width, 300, 330);
+        Assert.InRange(crop.Height, 42, 48);
+        Assert.True(crop.Bottom < 560);
+    }
+
+    [Fact]
     public void CaptchaGuard_RecognizesResultBelowSolvedCaptchaCard()
     {
         var nodes = new (string Text, Rectangle Bounds)[]

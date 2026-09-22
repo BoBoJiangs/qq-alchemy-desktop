@@ -686,7 +686,7 @@ public sealed class AutomationCoordinator : BackgroundService
         {
             _checkpoint.LastCaptchaScreenshot = _qq.SaveCaptchaPreview();
             await _store.AuditAsync("info", "captcha_screenshot_captured",
-                "已截取验证码所在聊天区域，仅用于本地显示，未上传识别服务",
+                "已截取验证码图片预览，仅用于本地显示，未上传识别服务",
                 cancellationToken: cancellationToken);
         }
         catch (Exception exception)
