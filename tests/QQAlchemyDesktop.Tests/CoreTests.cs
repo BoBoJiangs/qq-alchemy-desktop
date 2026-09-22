@@ -333,6 +333,15 @@ public sealed class CoreTests : IDisposable
     }
 
     [Fact]
+    public void QqCalibration_AcceptsVisibleRowsWithoutHeader()
+    {
+        var text = "名字：地心淬灵乳\n拥有数量:32---\n第1页/共5页";
+
+        Assert.True(QqDesktopClient.HasAccessibleInventoryPageText(text, 1));
+        Assert.False(QqDesktopClient.HasAccessibleInventoryPageText(text, 2));
+    }
+
+    [Fact]
     public void InventoryFastOcr_RejectsIncompleteNormalPage()
     {
         var names = Enumerable.Range(1, 18).Select(index => $"药材{index}").ToArray();

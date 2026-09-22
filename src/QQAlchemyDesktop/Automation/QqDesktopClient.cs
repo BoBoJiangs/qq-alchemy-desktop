@@ -287,8 +287,26 @@ public sealed class QqDesktopClient
     /// herb-name completeness check is reserved for the real inventory flow.
     /// </summary>
     public bool TryObserveAccessibleInventoryPage(int expectedPage,
-        out OcrObservation observation) =>
-        TryObserveAccessibleInventoryPageCore(expectedPage, Array.Empty<string>(), out observation);
+        out OcrObservation observation)
+    {
+        observation = default!;
+        if (expectedPage <= 0) return false;
+        var visible = GetVisibleAccessibleTexts();
+        if (visible.Count == 0) return false;
+        var raw = string.Join('\n', visible.Select(item => item.Text));
+        if (!HasAccessibleInventoryPageText(raw, expectedPage)) return false;
+
+        var signature = string.Join('|', visible.Select(item =>
+            $"{item.Text}:{item.Bounds.Left},{item.Bounds.Top},{item.Bounds.Width},{item.Bounds.Height}"));
+        var words = visible.Select(item => new OcrWordData(item.Text,
+            new PixelRect(item.Bounds.Left, item.Bounds.Top,
+                Math.Max(1, item.Bounds.Width), Math.Max(1, item.Bounds.Height)), 0.99d))
+            .ToArray();
+        observation = new OcrObservation(raw, words,
+            Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(signature))),
+            DateTimeOffset.Now);
+        return true;
+    }
 
     private bool TryObserveAccessibleInventoryPageCore(int expectedPage,
         IReadOnlyCollection<string> knownHerbNames, out OcrObservation observation)
@@ -409,6 +427,15 @@ public sealed class QqDesktopClient
         MessageClassifier.IsInventoryPage(text) &&
         (text.Contains("拥有数量", StringComparison.Ordinal) ||
          text.Contains("数量", StringComparison.Ordinal));
+
+    internal static bool HasAccessibleInventoryPageText(string text, int expectedPage)
+    {
+        var page = ParsePageState(text);
+        return page is { Current: var current } && current == expectedPage &&
+               text.Contains("拥有数量", StringComparison.Ordinal) &&
+               (text.Contains("名字：", StringComparison.Ordinal) ||
+                text.Contains("名字:", StringComparison.Ordinal));
+    }
 
     internal static bool IsInventoryTitle(string text, int expectedPage) =>
         string.Equals(text, "药材背包", StringComparison.Ordinal) ||
@@ -798,7 +825,7 @@ public sealed class QqDesktopClient
                     if (TryObserveAccessibleInventoryPage(expectedPage, out var inventoryUia))
                     {
                         page = ParsePageState(inventoryUia.RawText);
-                        inventoryPage = MessageClassifier.IsInventoryPage(inventoryUia.RawText);
+                        inventoryPage = HasAccessibleInventoryPageText(inventoryUia.RawText, expectedPage);
                         if (page is not null && inventoryPage)
                         {
                             await _store.AuditAsync("info", "verify_page_uia_fallback",
