@@ -421,7 +421,10 @@ public sealed class QqDesktopClient
         text.Contains("成功购买", StringComparison.Ordinal) ||
         text.Contains("未查询", StringComparison.Ordinal) ||
         text.Contains("坊市现在", StringComparison.Ordinal) ||
-        text.Contains("上一条指令", StringComparison.Ordinal);
+        text.Contains("上一条指令", StringComparison.Ordinal) ||
+        text.Contains("成功炼成丹药", StringComparison.Ordinal) ||
+        text.Contains("炼丹炉是否在背包中", StringComparison.Ordinal) ||
+        text.Contains("药材是否在背包中", StringComparison.Ordinal);
 
     internal static bool HasInventoryPayload(string text) =>
         MessageClassifier.IsInventoryPage(text) &&

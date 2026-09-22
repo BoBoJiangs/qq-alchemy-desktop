@@ -242,10 +242,14 @@ public sealed class CoreTests : IDisposable
             0, AutomationCoordinator.ActionDelayKind.Purchase));
         Assert.Equal((450, 450), AutomationCoordinator.GetActionDelayBounds(
             0, AutomationCoordinator.ActionDelayKind.InventoryQuery));
+        Assert.Equal((300, 300), AutomationCoordinator.GetActionDelayBounds(
+            0, AutomationCoordinator.ActionDelayKind.Alchemy));
         Assert.Equal((1200, 3200), AutomationCoordinator.GetActionDelayBounds(
             2, AutomationCoordinator.ActionDelayKind.Query));
         Assert.Equal(180, AutomationCoordinator.GetPollingDelayMilliseconds(
             AutomationState.WaitingPurchaseResult));
+        Assert.Equal(180, AutomationCoordinator.GetPollingDelayMilliseconds(
+            AutomationState.WaitingAlchemyResult));
         Assert.Equal(180, AutomationCoordinator.GetPollingDelayMilliseconds(
             AutomationState.ReadingInventory));
         Assert.Equal(450, AutomationCoordinator.GetPollingDelayMilliseconds(

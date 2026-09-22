@@ -139,6 +139,7 @@ public sealed class OcrAutomationTests
         Assert.True(QqDesktopClient.HasUsefulChatMarker("药材背包 第2页/共5页"));
         Assert.True(QqDesktopClient.HasUsefulChatMarker("坊市购买22906fc8-99c2-4356-a466-4c17e3d8dcb5"));
         Assert.True(QqDesktopClient.HasUsefulChatMarker("未查询到该物品"));
+        Assert.True(QqDesktopClient.HasUsefulChatMarker("成功炼成丹药：易筋丹"));
         Assert.False(QqDesktopClient.HasUsefulChatMarker("普通聊天消息"));
         Assert.True(QqDesktopClient.HasInventoryPayload("药材背包 名字：九叶芝 拥有数量：2"));
         Assert.False(QqDesktopClient.HasInventoryPayload("药材背包"));

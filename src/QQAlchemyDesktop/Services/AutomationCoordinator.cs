@@ -24,6 +24,7 @@ public sealed class AutomationCoordinator : BackgroundService
     private DateTimeOffset? _deadline;
     private DateTimeOffset _nextAccessibleProbe = DateTimeOffset.MinValue;
     private DateTimeOffset _nextPurchaseResultOcrProbe = DateTimeOffset.MinValue;
+    private DateTimeOffset _nextAlchemyResultOcrProbe = DateTimeOffset.MinValue;
     private DateTimeOffset _nextInventoryAccessibleProbe = DateTimeOffset.MinValue;
     private DateTimeOffset _nextInventoryOcrProbe = DateTimeOffset.MinValue;
     private bool _queryRetried;
@@ -292,6 +293,26 @@ public sealed class AutomationCoordinator : BackgroundService
             {
                 // Keep the coordinator responsive without repeatedly OCRing
                 // the same unchanged bottom-of-chat pixels.
+                return;
+            }
+            else if (_checkpoint.State == AutomationState.WaitingAlchemyResult &&
+                     _qq.TryObserveVisibleChat(out var alchemyAccessibleObservation) &&
+                     (MessageClassifier.IsAlchemySuccess(alchemyAccessibleObservation.RawText) ||
+                      MessageClassifier.IsAlchemyFatal(alchemyAccessibleObservation.RawText)))
+            {
+                // 炼丹回执通常会先出现在 QQ 的可访问性树中。优先读取 UIA，
+                // 避免每条命令都等待整块聊天区域的双帧 OCR。
+                observation = alchemyAccessibleObservation;
+            }
+            else if (_checkpoint.State == AutomationState.WaitingAlchemyResult &&
+                     DateTimeOffset.UtcNow >= _nextAlchemyResultOcrProbe)
+            {
+                // UIA 尚未暴露回执时才做 OCR，并限制频率，避免重复识别同一帧。
+                _nextAlchemyResultOcrProbe = DateTimeOffset.UtcNow.AddMilliseconds(700);
+                observation = await _qq.ObserveChatAsync(cancellationToken);
+            }
+            else if (_checkpoint.State == AutomationState.WaitingAlchemyResult)
+            {
                 return;
             }
             else
@@ -940,15 +961,16 @@ public sealed class AutomationCoordinator : BackgroundService
     {
         // Keep a short but non-zero server-safe gap.  The previous fixed
         // 2-5 second random wait made every page unnecessarily slow; a
-        // 1.2s query gap and a 0.3s purchase gap retain a small pacing
-        // cushion. Purchase responses are read through UIA first, so the
-        // coordinator no longer waits for a full OCR pass before dispatching
-        // the next command or makes the bot look like a burst of back-to-back
-        // commands.
+        // 1.2s query gap and 0.3s purchase/alchemy gaps retain a small pacing
+        // cushion. Purchase and alchemy responses are read through UIA first,
+        // so the coordinator no longer waits for a full OCR pass before
+        // dispatching the next command or makes the bot look like a burst of
+        // back-to-back commands.
         var baseline = kind switch
         {
             ActionDelayKind.Purchase => 300,
             ActionDelayKind.InventoryQuery => 450,
+            ActionDelayKind.Alchemy => 300,
             _ => 1200
         };
         var extra = Math.Clamp(randomDelaySeconds, 0, 30) * 1000;
@@ -956,7 +978,8 @@ public sealed class AutomationCoordinator : BackgroundService
     }
 
     internal static int GetPollingDelayMilliseconds(AutomationState state) =>
-        state is AutomationState.WaitingPurchaseResult or AutomationState.ReadingInventory ? 180 : 450;
+        state is AutomationState.WaitingPurchaseResult or AutomationState.WaitingAlchemyResult or
+            AutomationState.ReadingInventory ? 180 : 450;
 
     private static async Task DelayActionAsync(AlchemySettings settings, ActionDelayKind kind,
         CancellationToken cancellationToken)
@@ -977,6 +1000,7 @@ public sealed class AutomationCoordinator : BackgroundService
         _pendingListing = null;
         _lastQuery = null;
         _nextPurchaseResultOcrProbe = DateTimeOffset.MinValue;
+        _nextAlchemyResultOcrProbe = DateTimeOffset.MinValue;
         _nextInventoryAccessibleProbe = DateTimeOffset.MinValue;
         _nextInventoryOcrProbe = DateTimeOffset.MinValue;
         _candidates.Clear();
@@ -992,6 +1016,7 @@ public sealed class AutomationCoordinator : BackgroundService
         _deadline = null;
         _queryRetried = false;
         _nextPurchaseResultOcrProbe = DateTimeOffset.MinValue;
+        _nextAlchemyResultOcrProbe = DateTimeOffset.MinValue;
         _nextInventoryAccessibleProbe = DateTimeOffset.MinValue;
         _nextInventoryOcrProbe = DateTimeOffset.MinValue;
         _nextAccessibleProbe = DateTimeOffset.MinValue;
