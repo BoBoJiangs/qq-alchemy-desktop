@@ -1036,6 +1036,13 @@ public sealed class QqDesktopClient
         CancellationToken cancellationToken = default)
     {
         var settings = await RequireVerifiedCalibrationAsync(cancellationToken);
+        if (TryObserveAccessibleMarketPage(settings.ChatRegion, knownHerbNames, out var accessibleMarket))
+        {
+            await RecordOcrAuditAsync("info", "market_uia_fast_path",
+                $"UIA 直接读取坊市卡片，候选词数={accessibleMarket.Words.Count}");
+            return accessibleMarket;
+        }
+
         var baseObservation = await ObserveRegionTwiceAsync(settings.ChatRegion, cancellationToken,
             allowLiveRefresh: true);
         var resolver = new HerbNameResolver(knownHerbNames);
@@ -1196,6 +1203,113 @@ public sealed class QqDesktopClient
             .GroupBy(x => x.Bounds.Y)
             .Select(group => string.Concat(group.OrderBy(x => x.Bounds.X).Select(x => x.Text))));
         return new OcrObservation(raw, words, baseObservation.FrameHash, baseObservation.CapturedAt);
+    }
+
+    private bool TryObserveAccessibleMarketPage(NormalizedRect chatRegion,
+        IEnumerable<string> knownHerbNames,
+        out OcrObservation observation)
+    {
+        observation = default!;
+        var visible = GetVisibleAccessibleTexts();
+        if (!TryBuildAccessibleMarketWords(visible, knownHerbNames, out var screenWords) ||
+            !TryLocateWindowBounds(out var windowBounds)) return false;
+        var chatBounds = chatRegion.ToPixels(windowBounds);
+        var words = screenWords.Select(word => word with
+        {
+            Bounds = word.Bounds with
+            {
+                X = word.Bounds.X - chatBounds.Left,
+                Y = word.Bounds.Y - chatBounds.Top
+            }
+        }).ToArray();
+
+        var signature = string.Join('|', words.Select(word =>
+            $"{word.Text}:{word.Bounds.X},{word.Bounds.Y},{word.Bounds.Width},{word.Bounds.Height}"));
+        var raw = string.Join('\n', words
+            .GroupBy(word => word.Bounds.Y)
+            .OrderBy(group => group.Key)
+            .Select(group => string.Concat(group.OrderBy(word => word.Bounds.X).Select(word => word.Text))));
+        observation = new OcrObservation(raw, words,
+            Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(signature))),
+            DateTimeOffset.Now);
+        return true;
+    }
+
+    internal static bool TryBuildAccessibleMarketWords(
+        IReadOnlyList<(string Text, Rectangle Bounds)> visible,
+        IEnumerable<string> knownHerbNames, out IReadOnlyList<OcrWordData> words)
+    {
+        words = Array.Empty<OcrWordData>();
+        var marker = visible
+            .Where(node => node.Text.Contains("查看坊市药材", StringComparison.Ordinal) ||
+                           node.Text.Contains("坊市查看", StringComparison.Ordinal))
+            .OrderByDescending(node => node.Bounds.Top)
+            .FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(marker.Text)) return false;
+
+        var card = visible
+            .Where(node => node.Bounds.Top >= marker.Bounds.Top)
+            .OrderBy(node => node.Bounds.Top)
+            .ThenBy(node => node.Bounds.Left)
+            .ToArray();
+        if (!card.Any(node => node.Text.Contains("翻页", StringComparison.Ordinal) ||
+                              node.Text.Contains("下一页", StringComparison.Ordinal))) return false;
+
+        var resolver = new HerbNameResolver(knownHerbNames);
+        var herbs = card
+            .Select(node => (Node: node, Name: resolver.Resolve(node.Text)))
+            .Where(item => item.Name is not null)
+            .Select(item => (item.Node, Name: item.Name!))
+            .ToArray();
+        var prices = card
+            .Select((node, index) => (Node: node, Index: index, Price: ParseMarketPrice(node.Text)))
+            .Where(item => item.Price is not null)
+            .Select(item => (item.Node, item.Index, Price: item.Price!.Value))
+            .ToArray();
+        if (herbs.Length == 0 || prices.Length == 0) return false;
+
+        var matched = new List<(string Name, Rectangle HerbBounds, double Price)>();
+        var usedPrices = new HashSet<int>();
+        foreach (var herb in herbs)
+        {
+            var herbCenterY = herb.Node.Bounds.Top + herb.Node.Bounds.Height / 2d;
+            var price = prices
+                .Where(item => !usedPrices.Contains(item.Index))
+                .Select(item => new
+                {
+                    item.Index,
+                    item.Price,
+                    Distance = Math.Abs((item.Node.Bounds.Top + item.Node.Bounds.Height / 2d) - herbCenterY)
+                })
+                .Where(item => item.Distance <= 30)
+                .OrderBy(item => item.Distance)
+                .FirstOrDefault();
+            if (price is null) continue;
+            usedPrices.Add(price.Index);
+            matched.Add((herb.Name, herb.Node.Bounds, price.Price));
+        }
+
+        // Accept the fast path only when nearly every visible price has a
+        // paired herb. Otherwise the caller falls back to OCR instead of
+        // silently advancing with an incomplete market page.
+        var minimumMatches = prices.Length < 3
+            ? prices.Length
+            : Math.Max(3, (int)Math.Ceiling(prices.Length * 0.75));
+        if (matched.Count < minimumMatches) return false;
+
+        var result = matched.Select(item => new OcrWordData(item.Name,
+            new PixelRect(item.HerbBounds.Left, item.HerbBounds.Top,
+                Math.Max(1, item.HerbBounds.Width), Math.Max(1, item.HerbBounds.Height)), 0.99d))
+            .Concat(matched.Select(item => new OcrWordData(
+                $"价格:{item.Price:0.####}万",
+                new PixelRect(item.HerbBounds.Left - 80, item.HerbBounds.Top,
+                    70, Math.Max(1, item.HerbBounds.Height)), 0.99d)))
+            .ToArray();
+        words = result
+            .OrderBy(word => word.Bounds.Y)
+            .ThenBy(word => word.Bounds.X)
+            .ToArray();
+        return true;
     }
 
     private static double? ParseMarketPrice(string text)

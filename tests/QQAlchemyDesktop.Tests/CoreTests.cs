@@ -131,6 +131,30 @@ public sealed class CoreTests : IDisposable
     }
 
     [Fact]
+    public void MarketUiAFastPath_PairsVisiblePricesWithHerbs()
+    {
+        var visible = new (string Text, Rectangle Bounds)[]
+        {
+            ("查看坊市药材1", new Rectangle(120, 100, 120, 20)),
+            ("价格:420万", new Rectangle(120, 140, 70, 18)),
+            ("七彩月兰", new Rectangle(190, 140, 60, 18)),
+            ("物品功效", new Rectangle(120, 164, 70, 18)),
+            ("价格:290万", new Rectangle(120, 190, 70, 18)),
+            ("冰灵果", new Rectangle(190, 190, 50, 18)),
+            ("翻页", new Rectangle(120, 230, 40, 18))
+        };
+
+        Assert.True(QqDesktopClient.TryBuildAccessibleMarketWords(
+            visible, ["七彩月兰", "冰灵果"], out var words));
+        var listings = MarketParser.Parse(
+            new OcrObservation("", words, "UIA", DateTimeOffset.Now),
+            1, new HerbNameResolver(["七彩月兰", "冰灵果"]));
+        Assert.Equal(2, listings.Count);
+        Assert.Equal(420, listings[0].PriceWan);
+        Assert.Equal(290, listings[1].PriceWan);
+    }
+
+    [Fact]
     public void ResponseGate_IgnoresOldCardAboveCurrentCommand()
     {
         var observation = new OcrObservation("旧坊市\n查看坊市药材2\n新坊市", [
