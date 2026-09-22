@@ -935,6 +935,8 @@ public sealed class AutomationCoordinator : BackgroundService
         try
         {
             if (_checkpoint.State is AutomationState.Idle or AutomationState.Completed) return;
+            if (IsCaptchaStillVisible())
+                await CaptureCaptchaPreviewLockedAsync(cancellationToken);
             await PauseLockedAsync(exception is OcrConflictException ? AutomationState.PausedRecovery : AutomationState.Faulted,
                 exception.Message, cancellationToken);
         }
