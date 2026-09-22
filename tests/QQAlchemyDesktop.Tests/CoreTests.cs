@@ -91,16 +91,6 @@ public sealed class CoreTests : IDisposable
     }
 
     [Theory]
-    [InlineData(120, 210, 90, 190, true)]
-    [InlineData(120, 210, 320, 190, false)]
-    [InlineData(120, 210, 90, 140, false)]
-    public void MarketClickTarget_RequiresEffectLinkNearSameHerbRow(
-        int herbLeft, int herbTop, int effectLeft, int effectTop, bool expected) =>
-        Assert.Equal(expected, QqDesktopClient.IsLikelyMarketEffectPair(
-            new Rectangle(herbLeft, herbTop, 50, 18),
-            new Rectangle(effectLeft, effectTop, 50, 18)));
-
-    [Theory]
     [InlineData(ControlType.Document, true)]
     [InlineData(ControlType.List, true)]
     [InlineData(ControlType.Pane, true)]

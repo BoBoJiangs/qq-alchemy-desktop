@@ -28,9 +28,9 @@ public sealed class QqDesktopClient
     // immediately.  Poll the control briefly before falling back to one OCR
     // read; the old fixed 450ms + two-frame OCR path made every listing wait
     // several seconds even when UIA already exposed the UUID.
-    private const int PurchaseCodePostClickDelayMilliseconds = 220;
+    private const int PurchaseCodePostClickDelayMilliseconds = 180;
     private const int PurchaseCodePollMilliseconds = 60;
-    private const int PurchaseCodePollTimeoutMilliseconds = 650;
+    private const int PurchaseCodePollTimeoutMilliseconds = 350;
     private const int CommandInputFocusDelayMilliseconds = 100;
     private const int CommandPostTypeDelayMilliseconds = 120;
 
@@ -1305,16 +1305,13 @@ public sealed class QqDesktopClient
             var point = new Point(chat.Left + listing.ClickRect.Center.X,
                 chat.Top + listing.ClickRect.Center.Y + Math.Max(2, listing.ClickRect.Height / 3));
 
-            var locatedByEffectUia = TryFindVisibleMarketEffectHyperlinkPoint(process, settings,
+            var locatedByUia = TryFindVisibleMarketHyperlinkPoint(process, settings,
                 windowBounds, listing.HerbName, out var uiaPoint);
-            var locatedByUia = locatedByEffectUia || TryFindVisibleMarketHyperlinkPoint(process, settings,
-                windowBounds, listing.HerbName, out uiaPoint);
             if (locatedByUia)
             {
                 point = uiaPoint;
                 await _store.AuditAsync("info", "market_click_target_uia",
-                    $"{listing.HerbName} target={(locatedByEffectUia ? "物品功效" : "药材名")} " +
-                    $"screen={point.X},{point.Y}",
+                    $"{listing.HerbName} screen={point.X},{point.Y}",
                     listing.ListingToken, cancellationToken);
             }
             else
@@ -1387,14 +1384,30 @@ public sealed class QqDesktopClient
             }
             if (command is null)
             {
-                // QQ can delay the input update even after the correct link
-                // was invoked. Retry the same verified target once; never
-                // jump to a guessed offset that can hit another link.
-                ClearInput(input);
-                await _store.AuditAsync("info", "market_click_retry",
-                    $"{listing.HerbName} target={(locatedByEffectUia ? "物品功效" : "药材名")} " +
-                    $"screen={point.X},{point.Y}",
+                // On the current QQNT market card the visible herb name is
+                // usually decorative; the actionable purchase link is the
+                // adjacent “物品功效” link. Try that proven target before
+                // spending another OCR round on the same decorative link.
+                var effectPoint = new Point(point.X - 100, point.Y - 24);
+                await _store.AuditAsync("info", "market_click_effect_fallback",
+                    $"{listing.HerbName} screen={effectPoint.X},{effectPoint.Y}",
                     listing.ListingToken, cancellationToken);
+                Click(effectPoint.X, effectPoint.Y);
+                await Task.Delay(PurchaseCodePostClickDelayMilliseconds, cancellationToken);
+                command = await WaitForPurchaseCommandAsync(process, settings, cancellationToken);
+                if (command is null)
+                {
+                    preparedText = await RecognizeInputOnceAsync(settings, cancellationToken, expandRegion: true);
+                    if (PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName,
+                            requireBotMention: false, out var effectCommand)) command = effectCommand;
+                }
+            }
+            if (command is null)
+            {
+                // Some QQNT versions delay the first clickable-point event.
+                // Keep the original herb-name click as a final fallback, but
+                // still require a validated UUID before returning.
+                ClearInput(input);
                 Click(point.X, point.Y);
                 await Task.Delay(PurchaseCodePostClickDelayMilliseconds, cancellationToken);
                 command = await WaitForPurchaseCommandAsync(process, settings, cancellationToken);
@@ -1404,10 +1417,6 @@ public sealed class QqDesktopClient
                     if (PurchaseCommandValidator.TryValidate(preparedText, settings.GameBotDisplayName,
                             requireBotMention: false, out var retryCommand)) command = retryCommand;
                 }
-            }
-            if (command is null)
-            {
-                ClearInput(input);
             }
             if (command is null)
             {
@@ -1492,71 +1501,6 @@ public sealed class QqDesktopClient
         Thread.Sleep(80);
         KeyChord(NativeMethods.VkControl, NativeMethods.VkA);
         KeyPress(NativeMethods.VkBack);
-    }
-
-    private static bool TryFindVisibleMarketEffectHyperlinkPoint(Process process,
-        CalibrationSettings settings, Rectangle windowBounds, string herbName, out Point point)
-    {
-        point = default;
-        try
-        {
-            using var app = FlaUI.Core.Application.Attach(process);
-            using var automation = new UIA3Automation();
-            var window = app.GetMainWindow(automation, TimeSpan.FromSeconds(2));
-            if (window is null) return false;
-
-            var marketBounds = ExpandChatRegion(settings.ChatRegion).ToPixels(windowBounds);
-            var resolver = new HerbNameResolver([herbName]);
-            var links = window.FindAllDescendants(cf => cf.ByControlType(ControlType.Hyperlink))
-                .Select(element => new
-                {
-                    Element = element,
-                    Name = NormalizeAccessibleMatchText(element.Name?.Trim() ?? ""),
-                    Rectangle = element.BoundingRectangle
-                })
-                .Where(item => item.Rectangle.Width >= 8 && item.Rectangle.Height >= 8 &&
-                               marketBounds.IntersectsWith(item.Rectangle))
-                .ToArray();
-            var herbs = links.Where(item => resolver.Resolve(item.Name) == herbName).ToArray();
-            var effects = links.Where(item => item.Name == "物品功效").ToArray();
-
-            var matches = (from effect in effects
-                           from herb in herbs
-                           where IsLikelyMarketEffectPair(herb.Rectangle, effect.Rectangle)
-                           let verticalDistance = Math.Abs(herb.Rectangle.Top - effect.Rectangle.Bottom)
-                           let horizontalDistance = Math.Abs(herb.Rectangle.Left - effect.Rectangle.Left)
-                           orderby verticalDistance + horizontalDistance * 0.2
-                           select effect).ToArray();
-            // Duplicate herb listings are common.  Without a listing-specific
-            // anchor, choosing one of several matching effect links could
-            // select a different price row, so only accept an unambiguous pair.
-            if (matches.Length != 1) return false;
-            var match = matches[0];
-
-            if (match.Element.TryGetClickablePoint(out var clickable) &&
-                windowBounds.Contains(clickable))
-            {
-                point = clickable;
-            }
-            else
-            {
-                var rectangle = match.Rectangle;
-                point = new Point((int)Math.Round((double)(rectangle.Left + rectangle.Width / 2)),
-                    (int)Math.Round((double)(rectangle.Top + rectangle.Height / 2)));
-            }
-            return windowBounds.Contains(point);
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    internal static bool IsLikelyMarketEffectPair(Rectangle herb, Rectangle effect)
-    {
-        var verticalDistance = herb.Top - effect.Bottom;
-        var horizontalDistance = Math.Abs(herb.Left - effect.Left);
-        return verticalDistance >= -8 && verticalDistance <= 48 && horizontalDistance <= 180;
     }
 
     private static bool TryFindVisibleMarketHyperlinkPoint(Process process,
