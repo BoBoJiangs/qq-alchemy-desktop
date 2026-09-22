@@ -21,6 +21,8 @@ public sealed class QqDesktopClient
     private readonly SqliteStore _store;
     private readonly AppPaths _paths;
     private readonly SemaphoreSlim _inputGate = new(1, 1);
+    private readonly object _uiaSessionGate = new();
+    private CachedUiAutomationSession? _uiaSession;
 
     // A clicked market link normally fills the QQ edit control almost
     // immediately.  Poll the control briefly before falling back to one OCR
@@ -56,18 +58,19 @@ public sealed class QqDesktopClient
         var texts = new List<string>();
         try
         {
+            // Reuse the bound chat UIA session for the expensive text tree.
+            // The edit-control probe below remains a separate, short scan
+            // because it belongs to the composer rather than the message
+            // container.
+            texts.AddRange(GetAccessibleTextNodes(visibleOnly: false)
+                .Select(node => node.Text)
+                .Distinct(StringComparer.Ordinal)
+                .Take(200));
             using var app = FlaUI.Core.Application.Attach(process);
             using var automation = new UIA3Automation();
             var window = app.GetMainWindow(automation, TimeSpan.FromSeconds(2));
             if (window is not null)
             {
-                texts.AddRange(window.FindAllDescendants()
-                    .Where(element => element.ControlType == ControlType.Text ||
-                                      element.ControlType == ControlType.Hyperlink)
-                    .Select(x => x.Name?.Trim())
-                    .Where(x => !string.IsNullOrWhiteSpace(x))
-                    .Distinct(StringComparer.Ordinal)
-                    .Take(200)!);
                 texts.AddRange(window.FindAllDescendants(cf => cf.ByControlType(ControlType.Edit))
                     .Select(x => $"[EDIT] {x.Name?.Trim()} {x.BoundingRectangle.Left:0},{x.BoundingRectangle.Top:0} {x.BoundingRectangle.Width:0}x{x.BoundingRectangle.Height:0}"));
             }
@@ -109,32 +112,145 @@ public sealed class QqDesktopClient
     {
         if (!TryLocateWindow(out var process, out var hwnd) || process is null)
             return Array.Empty<AccessibleTextNode>();
-        try
+        lock (_uiaSessionGate)
         {
-            using var app = FlaUI.Core.Application.Attach(process);
-            using var automation = new UIA3Automation();
-            var window = automation.FromHandle(hwnd);
-            if (window is null) return Array.Empty<AccessibleTextNode>();
-            var chatViewport = GetChatViewport(window.BoundingRectangle);
-            return window.FindAllDescendants()
-                .Where(element => element.ControlType == ControlType.Text ||
-                                  element.ControlType == ControlType.Hyperlink)
-                .Select(element => new AccessibleTextNode(
-                    element.Name?.Trim() ?? "", element.BoundingRectangle))
-                .Where(item => item.Text.Length > 0 && item.Bounds.Width >= 4 &&
-                               item.Bounds.Height >= 6 &&
-                               (!visibleOnly || chatViewport.IntersectsWith(item.Bounds)))
-                .DistinctBy(item => (item.Text, item.Bounds.Left, item.Bounds.Top,
-                    item.Bounds.Width, item.Bounds.Height))
-                .OrderBy(item => item.Bounds.Top)
-                .ThenBy(item => item.Bounds.Left)
-                .ToArray();
-        }
-        catch
-        {
-            return Array.Empty<AccessibleTextNode>();
+            try
+            {
+                var session = GetOrCreateUiAutomationSession(process, hwnd);
+                var chatViewport = GetChatViewport(session.Window.BoundingRectangle);
+                var root = session.ChatRoot ?? session.Window;
+                var nodes = root.FindAllDescendants()
+                    .Where(element => element.ControlType == ControlType.Text ||
+                                      element.ControlType == ControlType.Hyperlink)
+                    .Select(element => new AccessibleTextNode(
+                        element.Name?.Trim() ?? "", element.BoundingRectangle))
+                    .Where(item => item.Text.Length > 0 && item.Bounds.Width >= 4 &&
+                                   item.Bounds.Height >= 6 &&
+                                   (!visibleOnly || chatViewport.IntersectsWith(item.Bounds)))
+                    .DistinctBy(item => (item.Text, item.Bounds.Left, item.Bounds.Top,
+                        item.Bounds.Width, item.Bounds.Height))
+                    .OrderBy(item => item.Bounds.Top)
+                    .ThenBy(item => item.Bounds.Left)
+                    .ToArray();
+                if (nodes.Length > 0)
+                    return nodes;
+
+                // QQ occasionally exposes the DocumentControl before its
+                // descendants are populated. Use the full window once in
+                // that case, but keep the session so the next poll does not
+                // recreate the UIA connection.
+                return ReadAccessibleTextNodes(session.Window, visibleOnly, chatViewport);
+            }
+            catch
+            {
+                // A QQ navigation can invalidate cached UIA COM elements.
+                // Rebuild on the next poll instead of returning stale text.
+                ResetUiAutomationSession();
+                return Array.Empty<AccessibleTextNode>();
+            }
         }
     }
+
+    private CachedUiAutomationSession GetOrCreateUiAutomationSession(Process process, IntPtr hwnd)
+    {
+        if (_uiaSession is not null && _uiaSession.Matches(process.Id, hwnd))
+            return _uiaSession;
+
+        ResetUiAutomationSession();
+        var app = FlaUI.Core.Application.Attach(process);
+        var automation = new UIA3Automation();
+        var window = automation.FromHandle(hwnd)
+                     ?? throw new InvalidOperationException("无法读取 QQ UI Automation 根窗口");
+        var chatRoot = FindChatMessageRoot(window);
+        _uiaSession = new CachedUiAutomationSession(process.Id, hwnd, app, automation, window, chatRoot);
+        return _uiaSession;
+    }
+
+    private void ResetUiAutomationSession()
+    {
+        _uiaSession?.Dispose();
+        _uiaSession = null;
+    }
+
+    private static IReadOnlyList<AccessibleTextNode> ReadAccessibleTextNodes(
+        AutomationElement root, bool visibleOnly, Rectangle chatViewport)
+    {
+        return root.FindAllDescendants()
+            .Where(element => element.ControlType == ControlType.Text ||
+                              element.ControlType == ControlType.Hyperlink)
+            .Select(element => new AccessibleTextNode(
+                element.Name?.Trim() ?? "", element.BoundingRectangle))
+            .Where(item => item.Text.Length > 0 && item.Bounds.Width >= 4 &&
+                           item.Bounds.Height >= 6 &&
+                           (!visibleOnly || chatViewport.IntersectsWith(item.Bounds)))
+            .DistinctBy(item => (item.Text, item.Bounds.Left, item.Bounds.Top,
+                item.Bounds.Width, item.Bounds.Height))
+            .OrderBy(item => item.Bounds.Top)
+            .ThenBy(item => item.Bounds.Left)
+            .ToArray();
+    }
+
+    private static AutomationElement? FindChatMessageRoot(AutomationElement window)
+    {
+        var viewport = GetChatViewport(window.BoundingRectangle);
+        var candidates = window.FindAllDescendants()
+            .Where(element => IsPotentialChatContainer(element.ControlType))
+            .Select(element => new
+            {
+                Element = element,
+                Type = element.ControlType,
+                Bounds = element.BoundingRectangle,
+                Name = (element.Name ?? "").Trim(),
+                ClassName = (element.ClassName ?? "").Trim()
+            })
+            .Where(item => item.Bounds.Width >= 160 && item.Bounds.Height >= 80 &&
+                           viewport.IntersectsWith(item.Bounds))
+            .Select(item => new
+            {
+                item.Element,
+                item.Type,
+                item.Bounds,
+                Score = ChatRootScore(item.Type, item.Name, item.ClassName, item.Bounds, viewport)
+            })
+            .OrderByDescending(item => item.Score)
+            .ThenByDescending(item => item.Bounds.Width * item.Bounds.Height)
+            .ToArray();
+
+        return candidates.FirstOrDefault()?.Element;
+    }
+
+    private static int ChatRootScore(ControlType type, string name, string className,
+        Rectangle bounds, Rectangle viewport)
+    {
+        var score = type switch
+        {
+            ControlType.Document => 1_000_000,
+            ControlType.List => 900_000,
+            ControlType.Pane => 800_000,
+            ControlType.Group => 700_000,
+            ControlType.Custom => 600_000,
+            _ => 0
+        };
+        var label = $"{name} {className}";
+        if (label.Contains("消息", StringComparison.Ordinal) ||
+            label.Contains("聊天", StringComparison.Ordinal) ||
+            label.Contains("message", StringComparison.OrdinalIgnoreCase) ||
+            label.Contains("conversation", StringComparison.OrdinalIgnoreCase))
+            score += 100_000;
+
+        var overlap = Rectangle.Intersect(bounds, viewport);
+        if (!overlap.IsEmpty)
+        {
+            var viewportArea = Math.Max(1L, (long)viewport.Width * viewport.Height);
+            var overlapArea = (long)overlap.Width * overlap.Height;
+            score += (int)Math.Min(90_000, overlapArea * 90_000 / viewportArea);
+        }
+        return score;
+    }
+
+    internal static bool IsPotentialChatContainer(ControlType type) =>
+        type is ControlType.Document or ControlType.List or ControlType.Pane or
+            ControlType.Group or ControlType.Custom;
 
     private static Rectangle GetChatViewport(Rectangle windowBounds) => Rectangle.FromLTRB(
         windowBounds.Left + (int)(windowBounds.Width * 0.20),
@@ -2026,6 +2142,38 @@ public sealed class QqDesktopClient
         return selected.Handle != IntPtr.Zero && NativeMethods.GetWindowRect(selected.Handle, out var native)
             ? (bounds = native.ToRectangle()) != Rectangle.Empty
             : false;
+    }
+
+    private sealed class CachedUiAutomationSession : IDisposable
+    {
+        public CachedUiAutomationSession(int processId, IntPtr windowHandle,
+            FlaUI.Core.Application application, UIA3Automation automation,
+            AutomationElement window, AutomationElement? chatRoot)
+        {
+            ProcessId = processId;
+            WindowHandle = windowHandle;
+            Application = application;
+            Automation = automation;
+            Window = window;
+            ChatRoot = chatRoot;
+        }
+
+        public int ProcessId { get; }
+        public IntPtr WindowHandle { get; }
+        public FlaUI.Core.Application Application { get; }
+        public UIA3Automation Automation { get; }
+        public AutomationElement Window { get; }
+        public AutomationElement? ChatRoot { get; }
+
+        public bool Matches(int processId, IntPtr windowHandle) =>
+            ProcessId == processId && WindowHandle == windowHandle &&
+            NativeMethods.IsWindowVisible(windowHandle);
+
+        public void Dispose()
+        {
+            try { Automation.Dispose(); } catch { }
+            try { Application.Dispose(); } catch { }
+        }
     }
 
     private sealed record AccessibleTextNode(string Text, Rectangle Bounds);

@@ -2,6 +2,7 @@ using QQAlchemyDesktop.Domain;
 using QQAlchemyDesktop.Infrastructure;
 using QQAlchemyDesktop.Services;
 using QQAlchemyDesktop.Automation;
+using FlaUI.Core.Definitions;
 
 namespace QQAlchemyDesktop.Tests;
 
@@ -88,6 +89,19 @@ public sealed class CoreTests : IDisposable
         Assert.False(QqDesktopClient.IsNestedMentionRectangle(
             new Rectangle(20, 890, 260, 42), new Rectangle(320, 900, 36, 20)));
     }
+
+    [Theory]
+    [InlineData(ControlType.Document, true)]
+    [InlineData(ControlType.List, true)]
+    [InlineData(ControlType.Pane, true)]
+    [InlineData(ControlType.Group, true)]
+    [InlineData(ControlType.Custom, true)]
+    [InlineData(ControlType.Text, false)]
+    [InlineData(ControlType.Hyperlink, false)]
+    [InlineData(ControlType.Edit, false)]
+    public void QqUiAutomation_OnlyTreatsContainerControlsAsChatRootCandidates(
+        ControlType controlType, bool expected) =>
+        Assert.Equal(expected, QqDesktopClient.IsPotentialChatContainer(controlType));
 
     [Fact]
     public void MarketParser_ConvertsYiToWanAndKeepsClickRect()
