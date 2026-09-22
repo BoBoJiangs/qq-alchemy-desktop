@@ -115,6 +115,7 @@ public sealed class AutomationCheckpoint
     public string Step { get; set; } = "待机";
     public string? LastError { get; set; }
     public string? LastScreenshot { get; set; }
+    public string? LastCaptchaScreenshot { get; set; }
     public string? LastOcrText { get; set; }
     public string? PendingActionId { get; set; }
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.Now;
@@ -133,6 +134,7 @@ public sealed class AutomationStatus
     public bool DryRun { get; init; }
     public string? LastError { get; init; }
     public string? LastScreenshot { get; init; }
+    public string? LastCaptchaScreenshot { get; init; }
     public string? LastOcrText { get; init; }
     public IReadOnlyDictionary<string, int> Inventory { get; init; } = new Dictionary<string, int>();
     public IReadOnlyList<MarketListing> Candidates { get; init; } = Array.Empty<MarketListing>();

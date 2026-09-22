@@ -75,6 +75,7 @@ public sealed class AutomationCoordinator : BackgroundService
                 DryRun = _store.GetSettingAsync<AlchemySettings>("alchemy").GetAwaiter().GetResult()?.DryRun ?? true,
                 LastError = _checkpoint.LastError,
                 LastScreenshot = _checkpoint.LastScreenshot,
+                LastCaptchaScreenshot = _checkpoint.LastCaptchaScreenshot,
                 LastOcrText = _checkpoint.LastOcrText,
                 Inventory = new Dictionary<string, int>(_inventory, StringComparer.Ordinal),
                 Candidates = _candidates.ToArray(),
@@ -631,6 +632,7 @@ public sealed class AutomationCoordinator : BackgroundService
         _checkpoint.ResumeState = resumeState;
         _checkpoint.LastError = "等待手动处理验证码";
         _checkpoint.Step = "等待验证码处理（剩余 30 秒）";
+        await CaptureCaptchaPreviewLockedAsync(cancellationToken);
         await _store.SaveCheckpointAsync(_checkpoint, cancellationToken);
         await _store.AuditAsync("warn", "captcha_wait_started",
             "检测到验证码，等待人工处理，最多 30 秒", cancellationToken: cancellationToken);
@@ -676,6 +678,22 @@ public sealed class AutomationCoordinator : BackgroundService
 
         await PauseLockedAsync(AutomationState.PausedCaptcha,
             "验证码超过 30 秒未处理，请处理后恢复", cancellationToken);
+    }
+
+    private async Task CaptureCaptchaPreviewLockedAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            _checkpoint.LastCaptchaScreenshot = _qq.SaveCaptchaPreview();
+            await _store.AuditAsync("info", "captcha_screenshot_captured",
+                "已截取验证码所在聊天区域，仅用于本地显示，未上传识别服务",
+                cancellationToken: cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            await _store.AuditAsync("warn", "captcha_screenshot_failed",
+                $"验证码截图获取失败：{exception.Message}", cancellationToken: cancellationToken);
+        }
     }
 
     private bool IsCaptchaStillVisible()

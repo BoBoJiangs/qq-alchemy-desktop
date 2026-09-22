@@ -103,6 +103,18 @@ public sealed class CoreTests : IDisposable
     }
 
     [Fact]
+    public void CaptchaPreview_ExpandsConfiguredChatRegionWithoutLeavingWindow()
+    {
+        var preview = QqDesktopClient.GetCaptchaPreviewRegion(new NormalizedRect(0.22, 0.10, 0.77, 0.68));
+
+        Assert.Equal(0.04, preview.X, 2);
+        Assert.Equal(0.95, preview.Width, 2);
+        Assert.Equal(0.10, preview.Y, 2);
+        Assert.Equal(0.68, preview.Height, 2);
+        Assert.InRange(preview.X + preview.Width, 0, 1);
+    }
+
+    [Fact]
     public void CaptchaGuard_RecognizesResultBelowSolvedCaptchaCard()
     {
         var nodes = new (string Text, Rectangle Bounds)[]

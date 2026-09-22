@@ -46,6 +46,9 @@ async function refreshStatus() {
     const alert = $('alert'); const dangerous = ['PausedCaptcha','PausedRecovery','Faulted'].includes(s.state);
     alert.classList.toggle('hidden', !dangerous); alert.textContent = dangerous ? `自动化已暂停：${s.lastError || s.step}` : '';
     const shot = $('failureShot'); shot.classList.toggle('hidden', !s.lastScreenshot); if (s.lastScreenshot) shot.src = `/api/screenshots/latest?t=${Date.now()}`;
+    const captchaPreview = $('captchaPreview'); const captchaShot = $('captchaShot');
+    captchaPreview.classList.toggle('hidden', !s.lastCaptchaScreenshot);
+    if (s.lastCaptchaScreenshot) captchaShot.src = `/api/screenshots/captcha?t=${Date.now()}`;
     const inv = Object.entries(s.inventory || {}).sort((a,b) => a[0].localeCompare(b[0],'zh-CN'));
     $('inventoryCount').textContent = `${inv.length} 种`; list($('inventory'), inv, x => `<span>${escapeHtml(x[0])}</span><span class="tag">${x[1]}</span>`);
     $('candidateCount').textContent = `${s.candidates.length} 项`; list($('candidates'), s.candidates, x => `<span>${escapeHtml(x.herbName)} · 第 ${x.page} 页</span><span class="tag">${x.priceWan} 万</span>`);

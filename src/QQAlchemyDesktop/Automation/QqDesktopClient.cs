@@ -1149,6 +1149,9 @@ public sealed class QqDesktopClient
             recentChat.Height * recentHeightRatio);
     }
 
+    internal static NormalizedRect GetCaptchaPreviewRegion(NormalizedRect chatRegion) =>
+        ExpandChatRegion(chatRegion);
+
     private static NormalizedRect ExpandChatRegion(NormalizedRect region)
     {
         const double leftPadding = 0.18;
@@ -1886,6 +1889,23 @@ public sealed class QqDesktopClient
     public string SaveScreenshot(string prefix = "failure")
     {
         using var bitmap = CaptureWindowAsync().GetAwaiter().GetResult();
+        var path = Path.Combine(_paths.Screenshots, $"{prefix}-{DateTime.Now:yyyyMMdd-HHmmssfff}.png");
+        bitmap.Save(path, ImageFormat.Png);
+        return path;
+    }
+
+    /// <summary>
+    /// Captures the configured chat viewport for a captcha preview. This is
+    /// intentionally local-only: it does not upload or recognize the image.
+    /// </summary>
+    public string SaveCaptchaPreview(string prefix = "captcha")
+    {
+        var settings = _store.GetSettingAsync<CalibrationSettings>("calibration")
+            .GetAwaiter().GetResult();
+        using var bitmap = settings?.IsVerified == true
+            ? CaptureRegionAsync(GetCaptchaPreviewRegion(settings.ChatRegion), CancellationToken.None)
+                .GetAwaiter().GetResult()
+            : CaptureWindowAsync().GetAwaiter().GetResult();
         var path = Path.Combine(_paths.Screenshots, $"{prefix}-{DateTime.Now:yyyyMMdd-HHmmssfff}.png");
         bitmap.Save(path, ImageFormat.Png);
         return path;

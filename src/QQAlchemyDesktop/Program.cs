@@ -181,6 +181,15 @@ internal static class Program
             if (!full.StartsWith(root, StringComparison.OrdinalIgnoreCase)) return Results.BadRequest();
             return Results.File(full, "image/png", enableRangeProcessing: false);
         });
+        app.MapGet("/api/screenshots/captcha", (AutomationCoordinator coordinator, AppPaths paths) =>
+        {
+            var file = coordinator.GetStatus().LastCaptchaScreenshot;
+            if (string.IsNullOrWhiteSpace(file) || !File.Exists(file)) return Results.NotFound();
+            var full = Path.GetFullPath(file);
+            var root = Path.GetFullPath(paths.Screenshots) + Path.DirectorySeparatorChar;
+            if (!full.StartsWith(root, StringComparison.OrdinalIgnoreCase)) return Results.BadRequest();
+            return Results.File(full, "image/png", enableRangeProcessing: false);
+        });
     }
 
     private static async Task EnsureDefaultsAsync(SqliteStore store)
