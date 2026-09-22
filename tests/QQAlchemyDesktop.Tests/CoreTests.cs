@@ -325,6 +325,14 @@ public sealed class CoreTests : IDisposable
     }
 
     [Fact]
+    public void QqCalibration_AcceptsBotDisplayNameInventoryTitle()
+    {
+        Assert.True(QqDesktopClient.IsInventoryTitle("一心的药材背包", 1));
+        Assert.True(QqDesktopClient.IsInventoryTitle("药材背包2", 2));
+        Assert.False(QqDesktopClient.IsInventoryTitle("坊市数据", 1));
+    }
+
+    [Fact]
     public void InventoryFastOcr_RejectsIncompleteNormalPage()
     {
         var names = Enumerable.Range(1, 18).Select(index => $"药材{index}").ToArray();

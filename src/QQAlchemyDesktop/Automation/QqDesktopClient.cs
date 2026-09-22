@@ -406,9 +406,10 @@ public sealed class QqDesktopClient
         (text.Contains("拥有数量", StringComparison.Ordinal) ||
          text.Contains("数量", StringComparison.Ordinal));
 
-    private static bool IsInventoryTitle(string text, int expectedPage) =>
+    internal static bool IsInventoryTitle(string text, int expectedPage) =>
         string.Equals(text, "药材背包", StringComparison.Ordinal) ||
-        string.Equals(text, $"药材背包{expectedPage}", StringComparison.Ordinal);
+        string.Equals(text, $"药材背包{expectedPage}", StringComparison.Ordinal) ||
+        text.Contains("的药材背包", StringComparison.Ordinal);
 
     private static (int Current, int Total)? ParsePageMarker(string text)
     {
