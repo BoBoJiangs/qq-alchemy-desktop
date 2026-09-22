@@ -128,6 +128,17 @@ public sealed class CoreTests : IDisposable
         Assert.True(QqDesktopClient.IsCaptchaResolvedByFollowingText(nodes));
     }
 
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    public void CaptchaGuard_IgnoresHistoricalCaptchaTextAfterResolution(
+        bool hasUnresolvedVisibleCaptcha, bool expectedPause)
+    {
+        Assert.Equal(expectedPause, AutomationCoordinator.ShouldPauseForCaptcha(
+            "请点击图中第5个表情对应的按钮\n奖励5008灵石\n恭喜道友成功炼成丹药：素心真丸6.0枚",
+            hasUnresolvedVisibleCaptcha));
+    }
+
     [Fact]
     public void MentionDeduplication_RecognizesNestedPopupText()
     {

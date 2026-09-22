@@ -327,7 +327,8 @@ public sealed class AutomationCoordinator : BackgroundService
             if (messageHash == _lastMessageHash) return;
             _lastMessageHash = messageHash;
 
-            if (MessageClassifier.IsCaptcha(observation.RawText))
+            if (MessageClassifier.IsCaptcha(observation.RawText) &&
+                ShouldPauseForCaptcha(observation.RawText, IsCaptchaStillVisible()))
             {
                 await WaitForCaptchaClearLockedAsync(cancellationToken);
                 return;
@@ -339,7 +340,7 @@ public sealed class AutomationCoordinator : BackgroundService
             if (DateTimeOffset.UtcNow >= _nextAccessibleProbe)
             {
                 _nextAccessibleProbe = DateTimeOffset.UtcNow.AddSeconds(2);
-                if (_qq.HasVisibleCaptcha())
+                if (IsCaptchaStillVisible())
                 {
                     await WaitForCaptchaClearLockedAsync(cancellationToken);
                     return;
@@ -696,6 +697,9 @@ public sealed class AutomationCoordinator : BackgroundService
             return true;
         }
     }
+
+    internal static bool ShouldPauseForCaptcha(string observedText, bool hasUnresolvedVisibleCaptcha) =>
+        hasUnresolvedVisibleCaptcha && MessageClassifier.IsCaptcha(observedText);
 
     private async Task ContinueAfterResumeLockedAsync(AutomationState resumeState,
         CancellationToken cancellationToken)
