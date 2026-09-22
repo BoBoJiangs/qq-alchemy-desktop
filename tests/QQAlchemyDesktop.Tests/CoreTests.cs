@@ -304,6 +304,18 @@ public sealed class CoreTests : IDisposable
     }
 
     [Fact]
+    public void QqCalibration_PrefersVisibleTextsOverStaleFullTree()
+    {
+        var visible = new[] { "一心的药材背包", "第2页/共5页" };
+        var staleFullTree = new[] { "旧响应 第5页/共5页", "旧响应药材背包5" };
+
+        var selected = QqDesktopClient.PreferVisibleAccessibleTexts(visible, staleFullTree);
+
+        Assert.Same(visible, selected);
+        Assert.Equal((2, 5), QqDesktopClient.ParsePageStateFromAccessibleTexts(selected));
+    }
+
+    [Fact]
     public void InventoryFastOcr_RejectsIncompleteNormalPage()
     {
         var names = Enumerable.Range(1, 18).Select(index => $"药材{index}").ToArray();

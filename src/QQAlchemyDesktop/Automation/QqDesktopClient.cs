@@ -768,8 +768,20 @@ public sealed class QqDesktopClient
                     // Use that read-only view as a bounded fallback so a
                     // healthy response does not fail calibration solely on a
                     // missed "第N页/共M页" glyph.
-                    var diagnostics = GetDiagnostics();
-                    accessibleTexts = diagnostics.AccessibleTexts;
+                    // Read only the current chat viewport here.  The full
+                    // QQ accessibility tree keeps scrolled-out cards alive,
+                    // so using GetDiagnostics() could repeatedly return an
+                    // old page marker after the next page command was sent.
+                    var visibleTexts = GetVisibleAccessibleTexts()
+                        .Select(item => item.Text)
+                        .ToArray();
+                    // If QQ temporarily exposes no visible text while the
+                    // card is animating, allow one full-tree retry.  Never
+                    // prefer the full tree when visible text is available;
+                    // stale off-screen pages are unsafe for calibration.
+                    accessibleTexts = PreferVisibleAccessibleTexts(
+                        visibleTexts,
+                        visibleTexts.Length == 0 ? GetDiagnostics().AccessibleTexts : Array.Empty<string>());
                     page = ParsePageStateFromAccessibleTexts(accessibleTexts);
                     inventoryPage = HasAccessibleInventoryResponse(accessibleTexts);
                     if (page is not null && inventoryPage)
@@ -787,7 +799,12 @@ public sealed class QqDesktopClient
                 {
                     // OCR may recover the page footer but miss the blue
                     // response heading; consult UIA before discarding it.
-                    accessibleTexts = GetDiagnostics().AccessibleTexts;
+                    var visibleTexts = GetVisibleAccessibleTexts()
+                        .Select(item => item.Text)
+                        .ToArray();
+                    accessibleTexts = PreferVisibleAccessibleTexts(
+                        visibleTexts,
+                        visibleTexts.Length == 0 ? GetDiagnostics().AccessibleTexts : Array.Empty<string>());
                     inventoryPage = HasAccessibleInventoryResponse(accessibleTexts);
                 }
                 if (page is null)
@@ -2350,6 +2367,10 @@ public sealed class QqDesktopClient
         }
         return null;
     }
+
+    internal static IReadOnlyList<string> PreferVisibleAccessibleTexts(
+        IReadOnlyList<string> visibleTexts, IReadOnlyList<string> fallbackTexts) =>
+        visibleTexts.Count > 0 ? visibleTexts : fallbackTexts;
 
     internal static bool HasAccessibleInventoryResponse(IReadOnlyList<string> accessibleTexts) =>
         accessibleTexts.Any(text => text.Contains("药材背包", StringComparison.Ordinal));
