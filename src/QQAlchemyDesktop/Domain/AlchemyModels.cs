@@ -37,6 +37,8 @@ public sealed class Herb
     }
 }
 
+public sealed record HerbCatalogItem(string Name, int Price, int Grade);
+
 public sealed class Dan
 {
     private static readonly Regex Digits = new(@"\d", RegexOptions.Compiled);
@@ -94,4 +96,3 @@ public sealed record Recipe(
         void Add(string name, int count) => result[name] = result.GetValueOrDefault(name) + Math.Abs(count);
     }
 }
-

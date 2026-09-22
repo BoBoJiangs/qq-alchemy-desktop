@@ -392,6 +392,18 @@ public sealed class CoreTests : IDisposable
     }
 
     [Fact]
+    public async Task HerbCatalog_ExposesReferencePriceAndGrade()
+    {
+        var (calculator, _, _) = await CreateCalculatorAsync();
+
+        var catalog = await calculator.GetHerbCatalogAsync();
+
+        Assert.Equal(4, catalog.Count);
+        Assert.Equal(new HerbCatalogItem("赤心草", 1, 1),
+            Assert.Single(catalog, item => item.Name == "赤心草"));
+    }
+
+    [Fact]
     public void AlchemyQueue_ConsumesSimulatedInventoryWithoutOverdrawing()
     {
         var herbA = Herb("甲草");

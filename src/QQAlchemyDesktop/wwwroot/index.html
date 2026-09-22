@@ -78,8 +78,6 @@
         <label class="check"><input id="dryRunSetting" type="checkbox" checked><span>演练模式：只识别，不点击、不发送炼丹配方</span></label>
         <label class="check"><input id="allowUnmentionedSetting" type="checkbox"><span>不 @ 机器人也允许触发命令（机器人支持时开启）</span></label>
         <button id="saveSettingsBtn" class="wide">保存安全设置</button>
-        <label class="rules-label">采购规则（每行：模式|最高万价|库存上限|药材名；模式填 repeat 或 normal）<textarea id="rulesText" rows="7" placeholder="repeat|80|30|乌灵参&#10;normal|120|30|血灵芝"></textarea></label>
-        <button id="saveRulesBtn" class="wide">保存采购规则</button>
       </article>
 
       <article class="card">
@@ -88,6 +86,32 @@
         <pre id="ocrText">暂无 OCR 结果</pre>
         <img id="failureShot" class="failure-shot hidden" alt="最近失败截图">
       </article>
+    </section>
+
+    <section class="card purchase-rules-card">
+      <div class="card-title"><h2>采购规则</h2><span id="ruleSummary">加载中…</span></div>
+      <div class="rule-toolbar">
+        <label>搜索药材<input id="ruleSearch" type="search" placeholder="输入药材名称"></label>
+        <label>品级<select id="ruleGradeFilter"><option value="">全部品级</option></select></label>
+        <label>采购模式<select id="ruleModeFilter"><option value="">全部模式</option><option value="normal">普通采购</option><option value="repeat">重复采购</option></select></label>
+        <label>排序<select id="ruleSort"><option value="price-desc">最高价：高 → 低</option><option value="price-asc">最高价：低 → 高</option><option value="grade-asc">品级：低 → 高</option><option value="name">药材名称：A → Z</option></select></label>
+        <button id="addRuleBtn" class="primary rule-add-btn">＋新增药材</button>
+      </div>
+      <div id="ruleEditor" class="rule-editor hidden">
+        <label>药材<select id="newRuleHerb"></select></label>
+        <label>最高采购价（万）<input id="newRulePrice" type="number" min="0" value="0"></label>
+        <label>库存上限<input id="newRuleLimit" type="number" min="0" value="30"></label>
+        <label>采购模式<select id="newRuleMode"><option value="normal">普通采购</option><option value="repeat">重复采购</option></select></label>
+        <div class="rule-editor-actions"><button id="confirmAddRule" class="primary">添加到列表</button><button id="cancelAddRule">取消</button></div>
+      </div>
+      <div class="table-wrap rules-table-wrap">
+        <table class="rules-table">
+          <thead><tr><th>药材</th><th>参考价</th><th>最高采购价（万）</th><th>库存上限</th><th>模式</th><th>操作</th></tr></thead>
+          <tbody id="purchaseRulesTable"></tbody>
+        </table>
+      </div>
+      <div id="rulesEmpty" class="rules-empty hidden">没有符合当前筛选条件的规则</div>
+      <div class="rule-footer"><span class="hint">修改表格内容后点击保存；参考价来自当前账号的药材价格文件。</span><button id="saveRulesBtn" class="primary">保存全部规则</button></div>
     </section>
 
     <section class="triple-grid">

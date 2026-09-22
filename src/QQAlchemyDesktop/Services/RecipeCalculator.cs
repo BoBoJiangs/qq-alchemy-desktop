@@ -24,6 +24,31 @@ public sealed class RecipeCalculator
     public IReadOnlyCollection<string> HerbNames => _herbs.Select(x => x.Name).ToArray();
     public IReadOnlyList<Recipe> Catalog => _catalog;
 
+    public async Task<IReadOnlyList<HerbCatalogItem>> GetHerbCatalogAsync(
+        CancellationToken cancellationToken = default)
+    {
+        await _generationGate.WaitAsync(cancellationToken);
+        try
+        {
+            await LoadDataAsync(cancellationToken);
+            return _herbs
+                .Select(herb => new HerbCatalogItem(herb.Name, herb.Price, GetHerbGrade(herb)))
+                .OrderBy(item => item.Grade)
+                .ThenBy(item => item.Name, StringComparer.Ordinal)
+                .ToArray();
+        }
+        finally
+        {
+            _generationGate.Release();
+        }
+    }
+
+    internal static int GetHerbGrade(Herb herb)
+    {
+        var value = Math.Max(1, herb.MainAttr1Value);
+        return Math.Clamp((int)Math.Log2(value) + 1, 1, 9);
+    }
+
     public async Task<IReadOnlyList<Recipe>> GenerateCatalogAsync(CancellationToken cancellationToken = default)
     {
         await _generationGate.WaitAsync(cancellationToken);

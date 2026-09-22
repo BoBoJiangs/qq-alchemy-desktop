@@ -146,6 +146,8 @@ internal static class Program
             await store.SetSettingAsync("alchemy", settings, token);
             return Results.Ok(settings);
         });
+        app.MapGet("/api/herbs/catalog", async (RecipeCalculator calculator, CancellationToken token) =>
+            await calculator.GetHerbCatalogAsync(token));
         app.MapPut("/api/settings/purchase-rules", async (List<PurchaseRule> rules, SqliteStore store,
             CancellationToken token) =>
         {
