@@ -315,10 +315,14 @@ public sealed class QqDesktopClient
                            node.Bounds.Top >= pageMarker.Bounds.Top - 2200)
             .OrderByDescending(node => node.Bounds.Top)
             .FirstOrDefault();
-        if (title is null) return false;
+        // QQ may virtualize the card header while keeping its rows and
+        // footer accessible. Calibration does not need the header itself;
+        // the real inventory path still supplies known herb names and keeps
+        // the strict completeness check below.
+        if (title is null && knownHerbNames.Count > 0) return false;
 
         var card = nodes
-            .Where(node => node.Bounds.Top >= title.Bounds.Top &&
+            .Where(node => node.Bounds.Top >= (title?.Bounds.Top ?? pageMarker.Bounds.Top - 2200) &&
                            node.Bounds.Top <= pageMarker.Bounds.Bottom + 24)
             .OrderBy(node => node.Bounds.Top)
             .ThenBy(node => node.Bounds.Left)
