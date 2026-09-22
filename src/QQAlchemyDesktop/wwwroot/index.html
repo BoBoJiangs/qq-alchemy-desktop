@@ -95,7 +95,11 @@
         <label>品级<select id="ruleGradeFilter"><option value="">全部品级</option></select></label>
         <label>采购模式<select id="ruleModeFilter"><option value="">全部模式</option><option value="normal">普通采购</option><option value="repeat">重复采购</option></select></label>
         <label>排序<select id="ruleSort"><option value="price-desc">最高价：高 → 低</option><option value="price-asc">最高价：低 → 高</option><option value="grade-asc">品级：低 → 高</option><option value="name">药材名称：A → Z</option></select></label>
-        <button id="addRuleBtn" class="primary rule-add-btn">＋新增药材</button>
+        <div class="rule-toolbar-actions">
+          <input id="rulePriceFile" class="hidden" type="file" accept=".txt,text/plain">
+          <button id="importRuleFileBtn" type="button">快速导入价格</button>
+          <button id="addRuleBtn" class="primary rule-add-btn" type="button">＋新增药材</button>
+        </div>
       </div>
       <div id="ruleEditor" class="rule-editor hidden">
         <label>药材<select id="newRuleHerb"></select></label>
@@ -111,7 +115,7 @@
         </table>
       </div>
       <div id="rulesEmpty" class="rules-empty hidden">没有符合当前筛选条件的规则</div>
-      <div class="rule-footer"><span class="hint">修改表格内容后点击保存；参考价来自当前账号的药材价格文件。</span><button id="saveRulesBtn" class="primary">保存全部规则</button></div>
+      <div class="rule-footer"><span class="hint">支持每行“价格 药材名”格式；导入只更新最高采购价，不改参考价和炼丹配方。其他规则会保留。</span><button id="saveRulesBtn" class="primary">保存全部规则</button></div>
     </section>
 
     <section class="triple-grid">

@@ -32,6 +32,27 @@ public sealed class CoreTests : IDisposable
     }
 
     [Fact]
+    public void PurchaseRuleImport_ParsesPriceFileAndMergesRules()
+    {
+        var existing = new[]
+        {
+            new PurchaseRule("冰灵果", 100, 8, 0, true),
+            new PurchaseRule("旧药材", 80, 6, 1)
+        };
+
+        var result = PurchaseRuleImportService.Import("950 离火梧桐芝\n120 冰灵果\n坏数据\n120 冰灵果\n", existing, 30);
+
+        Assert.Equal(2, result.ImportedCount);
+        Assert.Equal(1, result.AddedCount);
+        Assert.Equal(1, result.UpdatedCount);
+        Assert.Equal([3], result.InvalidLines);
+        Assert.Equal(120, result.Rules.Single(rule => rule.HerbName == "冰灵果").MaxPriceWan);
+        Assert.True(result.Rules.Single(rule => rule.HerbName == "冰灵果").RepeatPurchase);
+        Assert.Equal(30, result.Rules.Single(rule => rule.HerbName == "离火梧桐芝").InventoryLimit);
+        Assert.Equal(80, result.Rules.Single(rule => rule.HerbName == "旧药材").MaxPriceWan);
+    }
+
+    [Fact]
     public void InventoryParser_ParsesUiAVisibleCardLines()
     {
         var resolver = new HerbNameResolver(["冰灵果", "地心火芝"]);

@@ -166,6 +166,25 @@ $('purchaseRulesTable').addEventListener('click', event => {
   purchaseRules.splice(index, 1);
   renderNewRuleHerbs(); renderPurchaseRules();
 });
+$('importRuleFileBtn').addEventListener('click', () => $('rulePriceFile').click());
+$('rulePriceFile').addEventListener('change', event => {
+  const input = event.target;
+  const file = input.files?.[0];
+  if (!file) return;
+  busy($('importRuleFileBtn'), async () => {
+    const text = await file.text();
+    const result = await api('/api/settings/purchase-rules/import', {
+      method: 'POST',
+      body: JSON.stringify({ text })
+    });
+    purchaseRules = (result.rules || []).map((rule, index) => ({ ...rule, order: index }));
+    currentSettings.purchaseRules = purchaseRules;
+    renderNewRuleHerbs(); renderPurchaseRules();
+    const invalid = result.invalidLines?.length ? `，忽略 ${result.invalidLines.length} 行` : '';
+    toast(`已导入 ${result.importedCount} 条价格，更新 ${result.updatedCount} 条，新增 ${result.addedCount} 条${invalid}`);
+    await refreshAudit();
+  }).finally(() => { input.value = ''; });
+});
 $('addRuleBtn').addEventListener('click', () => { $('ruleEditor').classList.remove('hidden'); renderNewRuleHerbs(); });
 $('cancelAddRule').addEventListener('click', () => $('ruleEditor').classList.add('hidden'));
 $('newRuleHerb').addEventListener('change', updateNewRulePrice);

@@ -161,6 +161,15 @@ internal static class Program
             await store.SetSettingAsync("purchaseRules", normalized, token);
             return Results.Ok(normalized);
         });
+        app.MapPost("/api/settings/purchase-rules/import", async (PurchaseRuleImportRequest request,
+            SqliteStore store, CancellationToken token) =>
+        {
+            var existing = await store.GetSettingAsync<List<PurchaseRule>>("purchaseRules", token) ?? [];
+            var alchemy = await store.GetSettingAsync<AlchemySettings>("alchemy", token) ?? new AlchemySettings();
+            var result = PurchaseRuleImportService.Import(request.Text ?? string.Empty, existing, alchemy.LimitHerbsCount);
+            await store.SetSettingAsync("purchaseRules", result.Rules, token);
+            return Results.Ok(result);
+        });
         app.MapGet("/api/audit", async (int? count, SqliteStore store, CancellationToken token) =>
             await store.RecentAuditAsync(count ?? 100, token));
         app.MapGet("/api/screenshots/latest", (AutomationCoordinator coordinator, AppPaths paths) =>
@@ -193,4 +202,6 @@ internal static class Program
     }
 
     private sealed record GroupLookupRequest(long GroupQq);
+
+    private sealed record PurchaseRuleImportRequest(string? Text);
 }
