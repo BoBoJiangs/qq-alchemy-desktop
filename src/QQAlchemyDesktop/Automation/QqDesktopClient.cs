@@ -273,9 +273,22 @@ public sealed class QqDesktopClient
     /// </summary>
     public bool TryObserveAccessibleInventoryPage(int expectedPage,
         IReadOnlyCollection<string> knownHerbNames, out OcrObservation observation)
+        => TryObserveAccessibleInventoryPageCore(expectedPage, knownHerbNames, out observation);
+
+    /// <summary>
+    /// Reads the current inventory card without requiring the recipe catalog.
+    /// Calibration only needs a page marker and inventory title; the full
+    /// herb-name completeness check is reserved for the real inventory flow.
+    /// </summary>
+    public bool TryObserveAccessibleInventoryPage(int expectedPage,
+        out OcrObservation observation) =>
+        TryObserveAccessibleInventoryPageCore(expectedPage, Array.Empty<string>(), out observation);
+
+    private bool TryObserveAccessibleInventoryPageCore(int expectedPage,
+        IReadOnlyCollection<string> knownHerbNames, out OcrObservation observation)
     {
         observation = default!;
-        if (expectedPage <= 0 || knownHerbNames.Count == 0) return false;
+        if (expectedPage <= 0) return false;
         var nodes = GetAccessibleTextNodes(visibleOnly: false);
         if (nodes.Count == 0 || !TryGetWindowBounds(out var windowBounds)) return false;
         var chatViewport = GetChatViewport(windowBounds);
@@ -761,6 +774,24 @@ public sealed class QqDesktopClient
                 var page = ParsePageState(observation.RawText);
                 var inventoryPage = MessageClassifier.IsInventoryPage(observation.RawText);
                 IReadOnlyList<string> accessibleTexts = Array.Empty<string>();
+                if (page is null)
+                {
+                    // Reuse the same page-marker/viewport pairing used by
+                    // the real inventory task. It selects the card whose
+                    // footer is currently visible and avoids mistaking an
+                    // older off-screen inventory response for this page.
+                    if (TryObserveAccessibleInventoryPage(expectedPage, out var inventoryUia))
+                    {
+                        page = ParsePageState(inventoryUia.RawText);
+                        inventoryPage = MessageClassifier.IsInventoryPage(inventoryUia.RawText);
+                        if (page is not null && inventoryPage)
+                        {
+                            await _store.AuditAsync("info", "verify_page_uia_fallback",
+                                $"OCR 未识别页脚，按当前可视背包卡片读取第{page.Value.Current}页/共{page.Value.Total}页",
+                                cancellationToken: CancellationToken.None);
+                        }
+                    }
+                }
                 if (page is null)
                 {
                     // QQNT exposes the rendered card text through UIA even
