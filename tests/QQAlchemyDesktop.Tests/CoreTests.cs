@@ -116,6 +116,19 @@ public sealed class CoreTests : IDisposable
     }
 
     [Fact]
+    public void CaptchaGuard_RecognizesAlchemyResultBelowSolvedCaptchaCard()
+    {
+        var nodes = new (string Text, Rectangle Bounds)[]
+        {
+            ("请点击图中第4个表情对应的按钮", new Rectangle(120, 400, 180, 24)),
+            ("奖励2719灵石", new Rectangle(120, 600, 180, 24)),
+            ("恭喜道友成功炼成丹药：素心真丸6.0枚", new Rectangle(120, 680, 300, 24))
+        };
+
+        Assert.True(QqDesktopClient.IsCaptchaResolvedByFollowingText(nodes));
+    }
+
+    [Fact]
     public void MentionDeduplication_RecognizesNestedPopupText()
     {
         Assert.True(QqDesktopClient.IsNestedMentionRectangle(

@@ -532,6 +532,7 @@ public sealed class QqDesktopClient
 
         return nodes.Any(node => node.Bounds.Top > captchaBottom &&
             (MessageClassifier.IsPurchaseSuccess(node.Text) ||
+             MessageClassifier.IsAlchemySuccess(node.Text) ||
              node.Text.Contains("奖励", StringComparison.Ordinal)));
     }
 
