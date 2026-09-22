@@ -420,8 +420,9 @@ public sealed class CoreTests : IDisposable
         var catalog = await calculator.GetHerbCatalogAsync();
 
         Assert.Equal(4, catalog.Count);
-        Assert.Equal(new HerbCatalogItem("赤心草", 1, 1),
-            Assert.Single(catalog, item => item.Name == "赤心草"));
+        var herb = Assert.Single(catalog, item => item.Name == "赤心草");
+        Assert.Equal(new HerbCatalogItem("赤心草", 1, 1), herb with { Attributes = [] });
+        Assert.Equal(["性热1", "生息2816", "性平1", "养气2"], herb.Attributes);
     }
 
     [Fact]

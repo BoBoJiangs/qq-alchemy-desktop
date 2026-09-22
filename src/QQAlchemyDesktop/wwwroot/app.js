@@ -76,7 +76,7 @@ async function busy(button, action) { button.disabled = true; try { await action
 function gradeLabel(grade) { return gradeNames[Number(grade)] || '未分级'; }
 
 function herbMeta(name) {
-  return herbCatalog.find(item => item.name === name) || { name, price: 0, grade: 0 };
+  return herbCatalog.find(item => item.name === name) || { name, price: 0, grade: 0, attributes: [] };
 }
 
 function renderGradeFilter() {
@@ -125,6 +125,7 @@ function renderPurchaseRules() {
   $('purchaseRulesTable').innerHTML = rows.map(({ rule, index, meta }) => `
     <tr data-rule-index="${index}">
       <td><div class="rule-name">${escapeHtml(rule.herbName)}</div><span class="rule-grade">${gradeLabel(meta.grade)}药材</span></td>
+      <td class="rule-attributes"><div><span>主药</span>${escapeHtml(meta.attributes?.[0] || '未设置')} · ${escapeHtml(meta.attributes?.[1] || '未设置')}</div><div><span>药引/辅药</span>${escapeHtml(meta.attributes?.[2] || '未设置')} · ${escapeHtml(meta.attributes?.[3] || '未设置')}</div></td>
       <td class="reference-price">${meta.price > 0 ? `${meta.price} 万` : '未设置'}</td>
       <td><input class="table-input" data-rule-field="maxPriceWan" type="number" min="0" value="${rule.maxPriceWan}"></td>
       <td><input class="table-input" data-rule-field="inventoryLimit" type="number" min="0" value="${rule.inventoryLimit}"></td>

@@ -32,7 +32,16 @@ public sealed class RecipeCalculator
         {
             await LoadDataAsync(cancellationToken);
             return _herbs
-                .Select(herb => new HerbCatalogItem(herb.Name, herb.Price, GetHerbGrade(herb)))
+                .Select(herb => new HerbCatalogItem(herb.Name, herb.Price, GetHerbGrade(herb))
+                {
+                    Attributes =
+                    [
+                        FormatHerbAttribute(herb.MainAttr1Type, herb.MainAttr1Value),
+                        FormatHerbAttribute(herb.MainAttr2Type, herb.MainAttr2Value),
+                        FormatHerbAttribute(herb.LeadAttrType, herb.LeadAttrValue),
+                        FormatHerbAttribute(herb.AssistAttrType, herb.AssistAttrValue)
+                    ]
+                })
                 .OrderBy(item => item.Grade)
                 .ThenBy(item => item.Name, StringComparer.Ordinal)
                 .ToArray();
@@ -48,6 +57,8 @@ public sealed class RecipeCalculator
         var value = Math.Max(1, herb.MainAttr1Value);
         return Math.Clamp((int)Math.Log2(value) + 1, 1, 9);
     }
+
+    private static string FormatHerbAttribute(string type, int value) => $"{type}{value}";
 
     public async Task<IReadOnlyList<Recipe>> GenerateCatalogAsync(CancellationToken cancellationToken = default)
     {

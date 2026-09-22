@@ -37,7 +37,10 @@ public sealed class Herb
     }
 }
 
-public sealed record HerbCatalogItem(string Name, int Price, int Grade);
+public sealed record HerbCatalogItem(string Name, int Price, int Grade)
+{
+    public IReadOnlyList<string> Attributes { get; init; } = [];
+}
 
 public sealed class Dan
 {
